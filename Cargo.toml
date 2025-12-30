@@ -1,0 +1,69 @@
+[package]
+name = "lean4oj_backend"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+
+[lints.rust]
+dead_code = { level = "allow", priority = 1 }
+internal_features = { level = "allow", priority = 1 }
+non_snake_case = { level = "allow", priority = 1 }
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+# restriction = { level = "warn", priority = -2 }
+
+absolute_paths = { level = "allow", priority = 1 }
+allow_attributes = { level = "allow", priority = 1 }
+allow_attributes_without_reason = { level = "allow", priority = 1 }
+arbitrary_source_item_ordering = { level = "allow", priority = 1 }
+arithmetic_side_effects = { level = "allow", priority = 1 }
+as_conversions = { level = "allow", priority = 1 }
+# cast_lossless = { level = "allow", priority = 1 } # u32 -> u64
+cast_possible_truncation = { level = "allow", priority = 1 } # u64 -> u32
+# cast_possible_wrap = { level = "allow", priority = 1 } # u32 -> i32
+# cast_sign_loss = { level = "allow", priority = 1 } # i32 -> u32
+default_numeric_fallback = { level = "allow", priority = 1 }
+option_if_let_else = { level = "allow", priority = 1 }
+host_endian_bytes = { level = "allow", priority = 1 }
+implicit_return = { level = "allow", priority = 1 }
+indexing_slicing = { level = "allow", priority = 1 }
+inline_always = { level = "allow", priority = 1 }
+integer_division = { level = "allow", priority = 1 }
+integer_division_remainder_used = { level = "allow", priority = 1 }
+min_ident_chars = { level = "allow", priority = 1 }
+missing_assert_message = { level = "allow", priority = 1 }
+missing_docs_in_private_items = { level = "allow", priority = 1 }
+missing_errors_doc = { level = "allow", priority = 1 }
+missing_panics_doc = { level = "allow", priority = 1 }
+missing_trait_methods = { level = "allow", priority = 1 }
+module_name_repetitions = { level = "allow", priority = 1 }
+multiple_unsafe_ops_per_block = { level = "allow", priority = 1 }
+needless_pass_by_value = { level = "allow", priority = 1 }
+needless_return = { level = "allow", priority = 1 }
+non_ascii_literal = { level = "allow", priority = 1 }
+pattern_type_mismatch = { level = "allow", priority = 1 }
+pub_use = { level = "allow", priority = 1 }
+question_mark_used = { level = "allow", priority = 1 }
+ref_patterns = { level = "allow", priority = 1 }
+self_named_module_files = { level = "allow", priority = 1 }
+separated_literal_suffix = { level = "allow", priority = 1 }
+shadow_reuse = { level = "allow", priority = 1 }
+shadow_same = { level = "allow", priority = 1 }
+shadow_unrelated = { level = "allow", priority = 1 }
+similar_names = { level = "allow", priority = 1 }
+single_call_fn = { level = "allow", priority = 1 }
+single_char_lifetime_names = { level = "allow", priority = 1 }
+std_instead_of_alloc = { level = "allow", priority = 1 }
+std_instead_of_core = { level = "allow", priority = 1 }
+string_add = { level = "allow", priority = 1 }
+string_slice = { level = "allow", priority = 1 }
+unseparated_literal_suffix = { level = "allow", priority = 1 }
+unused_trait_names = { level = "allow", priority = 1 }
+wildcard_enum_match_arm = { level = "allow", priority = 1 }
+
+[[bin]]
+name = "backend"
+path = "src/main.rs"
