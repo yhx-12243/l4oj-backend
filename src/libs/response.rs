@@ -63,7 +63,9 @@ impl_lsz!(DBError, StatusCode::INTERNAL_SERVER_ERROR);
 impl_lsz!(BB8Error, StatusCode::INTERNAL_SERVER_ERROR);
 impl_lsz!(http::Error);
 impl_lsz!(hyper::Error);
+impl_lsz!(openssl::error::ErrorStack);
 impl_lsz!(tokio::task::JoinError, StatusCode::INTERNAL_SERVER_ERROR);
+impl_lsz!(tower_sessions_core::session::Error, StatusCode::INTERNAL_SERVER_ERROR);
 
 macro_rules! impl_zsxn {
     ($ty:ty) => {

@@ -90,16 +90,15 @@
     // unwrap_infallible,
     // yeet_expr,
 )]
+#![allow(incomplete_features, refining_impl_trait)]
 
 mod api;
 mod libs;
+mod models;
 
 #[tokio::main]
 async fn main() -> std::io::Result<!> {
-    use axum::{
-        Router,
-        extract::DefaultBodyLimit,
-    };
+    use axum::{Router, extract::DefaultBodyLimit};
     use hyper::server::conn;
     use hyper_util::rt::TokioIo;
     use tokio::net::UnixListener;
@@ -108,9 +107,10 @@ async fn main() -> std::io::Result<!> {
 
     const SOCK: &str = "lean4oj.sock";
 
-    libs::logger::init();
-
+    libs::auth::init();
     libs::db::init_db().await;
+    libs::logger::init();
+    libs::session::init();
 
     let mut app: Router = Router::new().nest("/api", api::all());
 

@@ -1,5 +1,7 @@
 #![allow(clippy::declare_interior_mutable_const)]
 
+use core::time::Duration;
+
 use http::header::{HeaderName, HeaderValue};
 use bytes::Bytes;
 
@@ -19,3 +21,12 @@ pub mod db {
     pub const PASSWORD: Option<&str> = option_env!("DB_PASSWORD");
     pub const CONNECTION_TIMEOUT: core::time::Duration = core::time::Duration::from_secs(5);
 }
+
+pub const GLOBAL_INTERVAL: Duration = Duration::from_secs(
+    #[cfg(debug_assertions)]
+    60,
+    #[cfg(not(debug_assertions))]
+    600,
+);
+
+pub const SESSION_EXPIRE: Duration = Duration::from_hours(1);

@@ -4,10 +4,11 @@ pub mod constants;
 pub mod db;
 pub mod error;
 pub mod logger;
+pub mod preference {
+    pub mod server;
+}
 pub mod request;
 pub mod response;
-pub mod preference {
-	pub mod server;
-}
+pub mod session;
 pub mod util;
 pub mod validate;

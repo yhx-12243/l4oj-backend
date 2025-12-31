@@ -1,6 +1,5 @@
 use std::process::{Command, Output};
 
-
 fn main() {
     let Output { stdout, .. } = Command::new("git")
         .args(["show", "-s", "--pretty=%H %cI"])

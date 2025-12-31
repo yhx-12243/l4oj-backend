@@ -1,0 +1,261 @@
+diff --git a/tower-sessions-core/Cargo.toml b/tower-sessions-core/Cargo.toml
+index 37e7864..c2a3616 100644
+--- a/tower-sessions-core/Cargo.toml
++++ b/tower-sessions-core/Cargo.toml
+@@ -14,19 +14,15 @@ axum-core = ["dep:axum-core"]
+ deletion-task = ["tokio/time"]
+ 
+ [dependencies]
+-async-trait = { workspace = true }
+ axum-core = { version = "0.5.0", optional = true }
+ base64 = "0.22.0"
+-futures = { version = "0.3.28", default-features = false, features = [
+-  "async-await",
+-] }
++futures-util = { version = "0.3.28" }
+ http = "1.0"
+ parking_lot = "0.12.1"
+ rand = "0.9"
+ serde = { version = "1.0.189", features = ["derive", "rc"] }
+ serde_json = "1.0.107"
+ thiserror = { workspace = true }
+-time = { version = "0.3.29", features = ["serde"] }
+ tokio = { workspace = true }
+ tracing = { version = "0.1.40", features = ["log"] }
+ 
+diff --git a/tower-sessions-core/src/lib.rs b/tower-sessions-core/src/lib.rs
+index e775c0a..10f584d 100644
+--- a/tower-sessions-core/src/lib.rs
++++ b/tower-sessions-core/src/lib.rs
+@@ -1,3 +1,5 @@
++#![feature(never_type)]
++
+ #[doc(inline)]
+ pub use self::{
+     session::{Expiry, Session},
+diff --git a/tower-sessions-core/src/session.rs b/tower-sessions-core/src/session.rs
+index db49a2e..b099e4a 100644
+--- a/tower-sessions-core/src/session.rs
++++ b/tower-sessions-core/src/session.rs
+@@ -14,12 +14,12 @@ use std::{
+ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, DecodeError, Engine as _};
+ use serde::{de::DeserializeOwned, Deserialize, Serialize};
+ use serde_json::Value;
+-use time::{Duration, OffsetDateTime};
++use std::time::{Duration, SystemTime};
+ use tokio::sync::{MappedMutexGuard, Mutex, MutexGuard};
+ 
+ use crate::{session_store, SessionStore};
+ 
+-const DEFAULT_DURATION: Duration = Duration::weeks(2);
++const DEFAULT_DURATION: Duration = Duration::from_hours(336);
+ 
+ type Result<T> = result::Result<T, Error>;
+ 
+@@ -61,12 +61,12 @@ struct Inner {
+ /// A session which allows HTTP applications to associate key-value pairs with
+ /// visitors.
+ #[derive(Debug, Clone)]
+-pub struct Session {
+-    store: Arc<dyn SessionStore>,
++pub struct Session<S> {
++    store: S,
+     inner: Arc<Inner>,
+ }
+ 
+-impl Session {
++impl<S: SessionStore> Session<S> {
+     /// Creates a new session with the session ID, store, and expiry.
+     ///
+     /// This method is lazy and does not invoke the overhead of talking to the
+@@ -84,7 +84,7 @@ impl Session {
+     /// ```
+     pub fn new(
+         session_id: Option<Id>,
+-        store: Arc<impl SessionStore>,
++        store: S,
+         expiry: Option<Expiry>,
+     ) -> Self {
+         let inner = Inner {
+@@ -529,13 +529,13 @@ impl Session {
+     /// ```rust
+     /// use std::sync::Arc;
+     ///
+-    /// use time::OffsetDateTime;
++    /// use time::SystemTime;
+     /// use tower_sessions::{session::Expiry, MemoryStore, Session};
+     ///
+     /// let store = Arc::new(MemoryStore::default());
+     /// let session = Session::new(None, store, None);
+     ///
+-    /// let expiry = Expiry::AtDateTime(OffsetDateTime::now_utc());
++    /// let expiry = Expiry::AtDateTime(SystemTime::now_utc());
+     /// session.set_expiry(Some(expiry));
+     ///
+     /// assert_eq!(session.expiry(), Some(expiry));
+@@ -547,34 +547,34 @@ impl Session {
+             .store(true, atomic::Ordering::Release);
+     }
+ 
+-    /// Get session expiry as `OffsetDateTime`.
++    /// Get session expiry as `SystemTime`.
+     ///
+     /// # Examples
+     ///
+     /// ```rust
+     /// use std::sync::Arc;
+     ///
+-    /// use time::{Duration, OffsetDateTime};
++    /// use time::{Duration, SystemTime};
+     /// use tower_sessions::{MemoryStore, Session};
+     ///
+     /// let store = Arc::new(MemoryStore::default());
+     /// let session = Session::new(None, store, None);
+     ///
+     /// // Our default duration is two weeks.
+-    /// let expected_expiry = OffsetDateTime::now_utc().saturating_add(Duration::weeks(2));
++    /// let expected_expiry = SystemTime::now_utc().saturating_add(Duration::weeks(2));
+     ///
+     /// assert!(session.expiry_date() > expected_expiry.saturating_sub(Duration::seconds(1)));
+     /// assert!(session.expiry_date() < expected_expiry.saturating_add(Duration::seconds(1)));
+     /// ```
+-    pub fn expiry_date(&self) -> OffsetDateTime {
++    pub fn expiry_date(&self) -> SystemTime {
+         let expiry = self.inner.expiry.lock();
+         match *expiry {
+             Some(Expiry::OnInactivity(duration)) => {
+-                OffsetDateTime::now_utc().saturating_add(duration)
++                SystemTime::now() + duration
+             }
+             Some(Expiry::AtDateTime(datetime)) => datetime,
+             Some(Expiry::OnSessionEnd) | None => {
+-                OffsetDateTime::now_utc().saturating_add(DEFAULT_DURATION) // TODO: The default should probably be configurable.
++                SystemTime::now() + DEFAULT_DURATION // TODO: The default should probably be configurable.
+             }
+         }
+     }
+@@ -598,10 +598,7 @@ impl Session {
+     /// assert!(session.expiry_age() < expected_duration.saturating_add(Duration::seconds(1)));
+     /// ```
+     pub fn expiry_age(&self) -> Duration {
+-        std::cmp::max(
+-            self.expiry_date() - OffsetDateTime::now_utc(),
+-            Duration::ZERO,
+-        )
++        self.expiry_date().duration_since(SystemTime::now()).unwrap_or(Duration::ZERO)
+     }
+ 
+     /// Returns `true` if the session has been modified during the request.
+@@ -917,11 +914,11 @@ impl FromStr for Id {
+ pub struct Record {
+     pub id: Id,
+     pub data: Data,
+-    pub expiry_date: OffsetDateTime,
++    pub expiry_date: SystemTime,
+ }
+ 
+ impl Record {
+-    fn new(expiry_date: OffsetDateTime) -> Self {
++    fn new(expiry_date: SystemTime) -> Self {
+         Self {
+             id: Id::default(),
+             data: Data::default(),
+@@ -935,7 +932,7 @@ impl Record {
+ /// # Examples
+ ///
+ /// ```rust
+-/// use time::{Duration, OffsetDateTime};
++/// use time::{Duration, SystemTime};
+ /// use tower_sessions::Expiry;
+ ///
+ /// // Will be expired on "session end".
+@@ -945,7 +942,7 @@ impl Record {
+ /// let expiry = Expiry::OnInactivity(Duration::minutes(5));
+ ///
+ /// // Will be expired at the given timestamp.
+-/// let expired_at = OffsetDateTime::now_utc().saturating_add(Duration::weeks(2));
++/// let expired_at = SystemTime::now_utc().saturating_add(Duration::weeks(2));
+ /// let expiry = Expiry::AtDateTime(expired_at);
+ /// ```
+ #[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+@@ -967,7 +964,7 @@ pub enum Expiry {
+     ///
+     /// This value may be extended manually with
+     /// [`set_expiry`](Session::set_expiry).
+-    AtDateTime(OffsetDateTime),
++    AtDateTime(SystemTime),
+ }
+ 
+ #[cfg(test)]
+@@ -1014,7 +1011,7 @@ mod tests {
+                 Ok(Some(Record {
+                     id: initial_id,
+                     data: Data::default(),
+-                    expiry_date: OffsetDateTime::now_utc(),
++                    expiry_date: SystemTime::now_utc(),
+                 }))
+             });
+         mock_store
+diff --git a/tower-sessions-core/src/session_store.rs b/tower-sessions-core/src/session_store.rs
+index 0a605eb..c5b63d0 100644
+--- a/tower-sessions-core/src/session_store.rs
++++ b/tower-sessions-core/src/session_store.rs
+@@ -83,7 +83,7 @@
+ //! deleting expired sessions at a specified interval.
+ use std::fmt::Debug;
+ 
+-use async_trait::async_trait;
++use futures_util::try_join;
+ 
+ use crate::session::{Id, Record};
+ 
+@@ -105,7 +105,6 @@ pub type Result<T> = std::result::Result<T, Error>;
+ /// Defines the interface for session management.
+ ///
+ /// See [`session_store`](crate::session_store) for more details.
+-#[async_trait]
+ pub trait SessionStore: Debug + Send + Sync + 'static {
+     /// Creates a new session in the store with the provided session record.
+     ///
+@@ -185,7 +184,6 @@ impl<Cache: SessionStore, Store: SessionStore> CachingSessionStore<Cache, Store>
+     }
+ }
+ 
+-#[async_trait]
+ impl<Cache, Store> SessionStore for CachingSessionStore<Cache, Store>
+ where
+     Cache: SessionStore,
+@@ -201,7 +199,7 @@ where
+         let store_save_fut = self.store.save(record);
+         let cache_save_fut = self.cache.save(record);
+ 
+-        futures::try_join!(store_save_fut, cache_save_fut)?;
++        futures_util::try_join!(store_save_fut, cache_save_fut)?;
+ 
+         Ok(())
+     }
+@@ -233,14 +231,13 @@ where
+         let store_delete_fut = self.store.delete(session_id);
+         let cache_delete_fut = self.cache.delete(session_id);
+ 
+-        futures::try_join!(store_delete_fut, cache_delete_fut)?;
++        futures_util::try_join!(store_delete_fut, cache_delete_fut)?;
+ 
+         Ok(())
+     }
+ }
+ 
+ /// Provides a method for deleting expired sessions.
+-#[async_trait]
+ pub trait ExpiredDeletion: SessionStore
+ where
+     Self: Sized,
+@@ -279,7 +276,7 @@ where
+     /// ```
+     #[cfg(feature = "deletion-task")]
+     #[cfg_attr(docsrs, doc(cfg(feature = "deletion-task")))]
+-    async fn continuously_delete_expired(self, period: tokio::time::Duration) -> Result<()> {
++    async fn continuously_delete_expired(self, period: tokio::time::Duration) -> Result<!> {
+         let mut interval = tokio::time::interval(period);
+         interval.tick().await; // The first tick completes immediately; skip.
+         loop {
