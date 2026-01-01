@@ -52,9 +52,9 @@ impl const Default for ServerVersion {
     }
 }
 
-#[derive(Default, Serialize)]
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SessionInfoResponse {
+struct SessionInfoResponse {
     server_version: ServerVersion,
     server_preference: PreferenceConfig,
     user_meta: Option<User>,
@@ -79,7 +79,11 @@ async fn get_session_info(req: Repult<Query<SessionInfoRequest>>) -> Response {
     };
     let jsonp = jsonp.is_some_and(not_falsy);
 
-    let mut res = SessionInfoResponse::default();
+    let mut res = SessionInfoResponse {
+        server_version: const { ServerVersion::default() },
+        server_preference: const { PreferenceConfig::default() },
+        user_meta: None,
+    };
 
     if let Some(token) = token
     && let Ok(encoded) = Encoded::try_from(token.as_bytes())

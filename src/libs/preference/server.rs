@@ -1,11 +1,10 @@
 use serde::Serialize;
 
-#[derive(Serialize)]
-struct UnitMap {}
+use crate::libs::serde::UnitMap;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct Security {
+pub struct Security {
     recaptcha_enabled: bool,
     allow_user_change_username: bool,
     allow_non_privileged_user_edit_public_problem: bool,
@@ -33,8 +32,8 @@ impl const Default for Security {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct Pagination {
-    homepage_user_list: u32,
+pub struct Pagination {
+    pub homepage_user_list: u32,
     homepage_problem_list: u32,
     problem_set: u32,
     search_problems_preview: u32,
@@ -71,7 +70,7 @@ impl const Default for Pagination {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct Misc {
+pub struct Misc {
     app_logo_for_theme: UnitMap,
     redirect_legacy_urls: bool,
     google_analytics_id: (),

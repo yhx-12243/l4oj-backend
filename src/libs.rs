@@ -9,6 +9,7 @@ pub mod preference {
 }
 pub mod request;
 pub mod response;
+pub mod serde;
 pub mod session;
 pub mod util;
 pub mod validate;
