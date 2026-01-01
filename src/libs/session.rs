@@ -66,7 +66,7 @@ impl ExpiredDeletion for GlobalStore {
 }
 
 pub fn init() {
-    let _ = tokio::spawn(GlobalStore.continuously_delete_expired(GLOBAL_INTERVAL)).map(Result::unwrap);
+    tokio::spawn(GlobalStore.continuously_delete_expired(GLOBAL_INTERVAL).map(Result::unwrap));
 }
 
 pub async fn create(uid: String) -> SResult<Session<GlobalStore>> {

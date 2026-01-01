@@ -35,9 +35,9 @@ impl const Default for Countdowns {
     fn default() -> Self {
         Self {
             items: SliceMap::from_slice([
-                ("WC 2026", 1770336000000),
-                ("IMO 2026", 1784075400000),
-                ("IOI 2026", 1786215600000),
+                ("WC 2026", 1_770_336_000_000),
+                ("IMO 2026", 1_784_075_400_000),
+                ("IOI 2026", 1_786_215_600_000),
             ].as_slice()),
         }
     }

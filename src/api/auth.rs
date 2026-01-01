@@ -13,7 +13,6 @@ use bytes::Bytes;
 use compact_str::CompactString;
 use http::{StatusCode, Uri, header};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use tower_sessions_core::session::Id;
 
 use crate::{
@@ -89,9 +88,8 @@ async fn get_session_info(req: Repult<Query<SessionInfoRequest>>) -> Response {
     && let Ok(encoded) = Encoded::try_from(token.as_bytes())
     && encoded.verify()
     && let Ok(session) = session::load(encoded.id).await
-    && let Ok(Some(Value::String(uid))) = session.get_value("uid").await
     && let Ok(mut conn) = get_connection().await
-    && let Ok(user) = User::by_uid(&uid, &mut conn).await {
+    && let Ok(user) = User::from_session(&session, &mut conn).await {
         res.user_meta = user;
     }
 
@@ -179,8 +177,8 @@ async fn login(req: JsonReqult<LoginRequest>) -> JkmxJsonResponse {
     JkmxJsonResponse::Response(StatusCode::OK, res.into())
 }
 
-async fn logout(session: Session_) -> JkmxJsonResponse {
-    if let Some(session) = session.0 {
+async fn logout(Session_(session): Session_) -> JkmxJsonResponse {
+    if let Some(session) = session {
         session.delete().await?;
     }
     JkmxJsonResponse::Response(StatusCode::OK, BYTES_NULL)

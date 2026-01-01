@@ -92,7 +92,7 @@ impl TryFrom<&[u8]> for Encoded {
         const N: usize = mem::size_of::<Encoded>();
         let mut buf = [0u8; N];
         if BASE64_STANDARD.decode_slice(src, &mut buf) == Ok(N) {
-            Ok(unsafe { mem::transmute(buf) })
+            Ok(unsafe { mem::transmute::<[u8; N], Self>(buf) })
         } else {
             Err(())
         }

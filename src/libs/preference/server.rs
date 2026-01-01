@@ -4,6 +4,7 @@ use crate::libs::serde::UnitMap;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(clippy::struct_excessive_bools)]
 pub struct Security {
     recaptcha_enabled: bool,
     allow_user_change_username: bool,

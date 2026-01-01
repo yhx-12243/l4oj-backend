@@ -3,6 +3,7 @@ pub mod auth;
 pub mod constants;
 pub mod db;
 pub mod error;
+pub mod fs;
 pub mod logger;
 pub mod preference {
     pub mod server;

@@ -4,12 +4,12 @@ use std::time::SystemTime;
 use compact_str::CompactString;
 use futures_util::TryStreamExt;
 use serde::Serialize;
+use serde_json::Value;
 use tokio_postgres::{Client, Row};
+use tower_sessions_core::Session;
 
 use crate::libs::{
-    db::{DBError, DBResult},
-    serde::JsTime,
-    validate::check_uid,
+    db::{DBError, DBResult}, serde::JsTime, session::GlobalStore, validate::check_uid
 };
 
 #[derive(Serialize)]
@@ -53,12 +53,17 @@ impl User {
         Ok(result)
     }
 
+    pub async fn from_session(session: &Session<GlobalStore>, db: &mut Client) -> DBResult<Option<Self>> {
+        let Ok(Some(Value::String(uid))) = session.get_value("uid").await else { return Ok(None) };
+        Self::by_uid(&uid, db).await
+    }
+
     pub async fn list(skip: i64, take: i64, db: &mut Client) -> DBResult<Vec<Self>> {
         pub const SQL: &str = "select uid, username, email, register_time, ac from lean4oj.users where username != '' order by ac desc, uid asc offset $1 limit $2";
 
         let stmt = db.prepare_static(SQL.into()).await?;
         let stream = db.query_raw(&stmt, &[&skip, &take]).await?;
-        stream.and_then(|row| ready(User::try_from(row))).try_collect().await
+        stream.and_then(|row| ready(Self::try_from(row))).try_collect().await
     }
 
     pub async fn count(db: &mut Client) -> DBResult<i64> {

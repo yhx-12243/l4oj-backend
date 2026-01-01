@@ -71,6 +71,7 @@
     // simd_wasm64,
     // slice_ptr_get,
     slice_range,
+    sliceindex_wrappers,
     stmt_expr_attributes,
     str_internals,
     // string_deref_patterns,
@@ -95,10 +96,12 @@
 mod api;
 mod libs;
 mod models;
+mod service;
 
 #[tokio::main]
 async fn main() -> std::io::Result<!> {
-    use axum::{Router, extract::DefaultBodyLimit};
+    use axum::{Router, extract::DefaultBodyLimit, routing::get};
+    use futures_util::FutureExt;
     use hyper::server::conn;
     use hyper_util::rt::TokioIo;
     use tokio::net::UnixListener;
@@ -112,7 +115,11 @@ async fn main() -> std::io::Result<!> {
     libs::logger::init();
     libs::session::init();
 
-    let mut app: Router = Router::new().nest("/api", api::all());
+    tokio::spawn(service::rsync::main().map(Result::unwrap));
+
+    let mut app: Router = Router::new()
+        .nest("/api", api::all())
+        .route("/lean{*path}", get(api::fs::static_with_permission));
 
     app = app.layer(DefaultBodyLimit::disable());
 

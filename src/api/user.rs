@@ -35,20 +35,28 @@ struct GetUserDetailResponse {
     meta: User,
     information: UnitMap,
     submissionCountPerDay: [!; 0],
+    rank: u64,
+    hasPrivilege: bool,
 }
 
 async fn get_user_detail(req: JsonReqult<GetUserDetailRequest>) -> JkmxJsonResponse {
+    const SQL_RANK: &str = "select count(*) from lean4oj.users where ac > $1";
+
     let Json(GetUserDetailRequest { uid }) = req?;
 
     let mut conn = get_connection().await?;
     let Some(user) = User::by_uid(&uid, &mut conn).await? else {
         return JkmxJsonResponse::Response(StatusCode::OK, const { Bytes::from_static(br#"{"error":"NO_SUCH_USER"}"#) });
     };
+    let stmt = conn.prepare_static(SQL_RANK.into()).await?;
+    let row = conn.query_one(&stmt, &[&user.ac.cast_signed()]).await?;
 
     let res = GetUserDetailResponse {
         meta: user,
         information: UnitMap {},
         submissionCountPerDay: [],
+        rank: row.try_get::<_, i64>(0)?.cast_unsigned() + 1,
+        hasPrivilege: true,
     };
 
     JkmxJsonResponse::Response(StatusCode::OK, serde_json::to_vec(&res)?.into())

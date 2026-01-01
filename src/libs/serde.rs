@@ -1,7 +1,7 @@
 use core::{fmt, time::Duration};
 use std::{io, time::SystemTime};
 
-use serde::{Serialize, ser::SerializeMap};
+use serde::{Serialize, Serializer, ser::SerializeMap};
 use serde_json::Serializer as JSerializer;
 
 #[repr(transparent)]
@@ -77,6 +77,18 @@ impl io::Write for Adapter<'_, '_> {
 
 #[derive(Clone, Copy)]
 #[repr(transparent)]
+pub struct JsonFormatArg<'a>(pub fmt::Arguments<'a>);
+
+impl fmt::Display for JsonFormatArg<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let adapter = Adapter::new(f);
+        let mut ser = JSerializer::new(adapter);
+        ser.collect_str(&self.0).map_err(|_| fmt::Error)
+    }
+}
+
+#[derive(Clone, Copy)]
+#[repr(transparent)]
 pub struct WithJson<T>(pub T);
 
 impl<T> fmt::Display for WithJson<T>
@@ -96,7 +108,7 @@ pub struct UnitMap {}
 pub struct SliceMap<K, V>(pub [(K, V)]);
 
 impl<K, V> SliceMap<K, V> {
-    pub const fn from_slice<'a>(slice: &'a [(K, V)]) -> &'a Self {
+    pub const fn from_slice(slice: &[(K, V)]) -> &Self {
         unsafe { core::mem::transmute(slice) }
     }
 }
@@ -111,7 +123,7 @@ where
         S: serde::Serializer,
     {
         let mut map = serializer.serialize_map(Some(self.0.len()))?;
-        for (k, v) in self.0.iter() {
+        for (k, v) in &self.0 {
             map.serialize_entry(k, v)?;
         }
         map.end()
@@ -131,5 +143,5 @@ pub fn JsTime<S>(time: &SystemTime, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {
-    JsDuration(unsafe { core::mem::transmute(time) }, serializer)
+    JsDuration(unsafe { &*core::ptr::from_ref(time).cast() }, serializer)
 }
