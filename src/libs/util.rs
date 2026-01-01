@@ -1,4 +1,4 @@
-use core::cell::UnsafeCell;
+use core::{ascii::Char, cell::UnsafeCell};
 use std::borrow::Cow;
 
 /// leading double quote is NOT included, the trailing one is REQUIRED.
@@ -27,4 +27,15 @@ pub fn unescape_quoted(str: &str) -> Result<Cow<'_, str>, serde_json::Error> {
             position.column,
         ))
     }
+}
+
+pub fn gen_random_ascii<const N: usize>() -> [Char; N] {
+    use rand::RngCore;
+    // const SAMPLER: UniformInt<u32> = UniformInt::new_inclusive(33, 126).unwrap();
+    #[inline]
+    fn g(rng: &mut impl RngCore) -> Char {
+        unsafe { Char::from_u8_unchecked((((u64::from(rng.next_u32()) * 94) >> 32) + 33) as _) }
+    }
+    let mut rng = rand::rng();
+    core::array::from_fn(|_| g(&mut rng))
 }

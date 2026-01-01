@@ -105,6 +105,7 @@ where
 #[derive(Serialize)]
 pub struct UnitMap {}
 
+#[repr(transparent)]
 pub struct SliceMap<K, V>(pub [(K, V)]);
 
 impl<K, V> SliceMap<K, V> {

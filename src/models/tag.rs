@@ -4,10 +4,13 @@ use compact_str::CompactString;
 use futures_util::TryStreamExt;
 use hashbrown::HashMap;
 use serde::Serialize;
-use tokio_postgres::{Client, Row, types::{Json, ToSql}};
+use tokio_postgres::{
+    Client, Row,
+    types::{Json, ToSql},
+};
 
-use crate::libs::db::{DBError, DBResult};
 use super::localedict::LocaleDict;
+use crate::libs::db::{DBError, DBResult};
 
 #[derive(Serialize)]
 pub struct Tag {

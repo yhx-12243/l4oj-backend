@@ -1,4 +1,8 @@
-use axum::{body::Body, extract::RawPathParams, response::{IntoResponse, Response}};
+use axum::{
+    body::Body,
+    extract::RawPathParams,
+    response::{IntoResponse, Response},
+};
 use http::{HeaderMap, HeaderValue, StatusCode, header::AUTHORIZATION};
 
 use crate::libs::{auth::Session_, constants::X_ACCEL_REDIRECT, fs};

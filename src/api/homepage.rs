@@ -1,11 +1,12 @@
-use axum::{Router, routing::get};
+use axum::{Router, extract::Query, routing::get};
+use compact_str::CompactString;
 use http::StatusCode;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     libs::{
-        db::get_connection, preference::server::Pagination, response::JkmxJsonResponse,
-        serde::SliceMap,
+        db::get_connection, preference::server::Pagination, request::Repult,
+        response::JkmxJsonResponse, serde::SliceMap,
     },
     models::user::User,
 };
@@ -45,44 +46,31 @@ impl const Default for Countdowns {
 
 #[repr(transparent)]
 #[derive(Serialize)]
-struct FriendLinks {
-    links: &'static SliceMap<&'static str, &'static str,>,
+struct FriendLinks<'a> {
+    links: &'a SliceMap<&'static str, &'static str>,
 }
 
-impl const Default for FriendLinks {
-    fn default() -> Self {
-        Self {
-            links: SliceMap::from_slice([
-                ("OI Wiki", "https://oi.wiki"),
-                ("Universal Online Judge", "https://uoj.ac"),
-                ("LibreOJ", "https://loj.ac"),
-                ("Luogu", "https://www.luogu.com.cn"),
-                ("QOJ", "https://qoj.ac"),
-                ("PJudge", "https://pjudge.ac"),
-                ("HydroOJ", "https://hydro.ac"),
-                ("Vijos", "https://vijos.org"),
-                ("OIerDb", "https://oier.baoshuo.dev"),
-                ("Lean Language Reference", "https://lean-lang.org/doc/reference/latest/"),
-                ("Mathlib4 Documentation", "https://leanprover-community.github.io/mathlib4_docs/"),
-                ("FPiL4", "https://lean-lang.org/functional_programming_in_lean/"),
-                ("TPiL4", "https://lean-lang.org/theorem_proving_in_lean4/"),
-            ].as_slice()),
-        }
-    }
+mod links;
+
+#[derive(Deserialize)]
+struct HomepageRequest {
+    locale: Option<CompactString>,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct HomepageResponse {
+struct HomepageResponse<'a> {
     announcements: [!; 0],
     hitokoto: HitokotoConfig,
     countdown: Countdowns,
-    friend_links: FriendLinks,
+    friend_links: FriendLinks<'a>,
     top_users: Vec<User>,
     latest_updated_problems: [!; 0],
 }
 
-pub async fn get_homepage() -> JkmxJsonResponse {
+async fn get_homepage(req: Repult<Query<HomepageRequest>>) -> JkmxJsonResponse {
+    let Query(HomepageRequest { locale }) = req?;
+
     let mut conn = get_connection().await?;
     let top_users = User::list(
         0,
@@ -91,11 +79,12 @@ pub async fn get_homepage() -> JkmxJsonResponse {
     )
     .await?;
 
+    let links = links::friend_links(locale.as_deref());
     let res = HomepageResponse {
         announcements: [],
         hitokoto: const { HitokotoConfig::default() },
         countdown: const { Countdowns::default() },
-        friend_links: const { FriendLinks::default() },
+        friend_links: FriendLinks { links: SliceMap::from_slice(&links) },
         top_users,
         latest_updated_problems: [],
     };

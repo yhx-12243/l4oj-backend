@@ -6,15 +6,19 @@ use http::StatusCode;
 use serde::Deserialize;
 
 use crate::{
-    libs::{auth::Session_, constants::BYTES_NULL, db::get_connection, request::JsonReqult, response::JkmxJsonResponse, serde::WithJson},
+    libs::{
+        auth::Session_, constants::BYTES_NULL, db::get_connection, request::JsonReqult,
+        response::JkmxJsonResponse, serde::WithJson,
+    },
     models::{
         localedict::{LocaleDict, LocaleDictEntryOwned},
-        tag::Tag, user::User,
+        tag::Tag,
+        user::User,
     },
 };
 
 #[derive(Deserialize)]
-pub struct GetAllTagsRequest {
+struct GetAllTagsRequest {
     locale: Option<CompactString>,
 }
 

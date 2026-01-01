@@ -24,11 +24,16 @@ pub fn is_lean_id_rest(ch: char) -> bool {
     matches!(ch, '₀'..='ₜ' | 'ᵢ'..='ᵪ' | 'ⱼ')
 }
 
+pub fn is_lean_id(s: &str) -> bool {
+    let mut iter = s.chars();
+    let Some(first) = iter.next() else { return false; };
+    is_lean_id_first(first) && iter.all(is_lean_id_rest)
+}
+
 pub fn check_uid(uid: &str) -> bool {
     let mut iter = uid.chars();
     let Some(first) = iter.next() else { return false; };
-    if !is_lean_id_first(first) { return false; }
-    matches!(
+    is_lean_id_first(first) && matches!(
         iter.try_fold(0usize, |len, ch| if is_lean_id_rest(ch) { Some(len + 1) } else { None }),
         Some(2..24),
     )

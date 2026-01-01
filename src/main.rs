@@ -9,6 +9,7 @@
     // box_vec_non_null,
     // bstr,
     const_array,
+    const_cmp,
     const_default,
     // const_format_args,
     const_index,
@@ -31,16 +32,19 @@
     // exit_status_error,
     f128,
     file_buffered,
+    fmt_helpers_for_derive,
     fmt_internals,
     // fn_traits,
     formatting_options,
     future_join,
     // gen_blocks,
+    generic_const_exprs,
     get_mut_unchecked,
     half_open_range_patterns_in_slices,
     // if_let_guard,
     impl_trait_in_assoc_type,
     int_format_into,
+    int_from_ascii,
     io_const_error,
     // io_error_more,
     ip_as_octets,
@@ -67,10 +71,12 @@
     postfix_match,
     ptr_as_ref_unchecked,
     // ptr_metadata,
+    result_option_map_or_default,
     rustc_attrs,
     // simd_wasm64,
     // slice_ptr_get,
     slice_range,
+    slice_index_methods,
     sliceindex_wrappers,
     stmt_expr_attributes,
     str_internals,
@@ -91,7 +97,12 @@
     // unwrap_infallible,
     // yeet_expr,
 )]
-#![allow(incomplete_features, refining_impl_trait)]
+#![allow(
+    confusable_idents,
+    incomplete_features,
+    mixed_script_confusables,
+    refining_impl_trait,
+)]
 
 mod api;
 mod libs;
@@ -113,6 +124,7 @@ async fn main() -> std::io::Result<!> {
     libs::auth::init();
     libs::db::init_db().await;
     libs::logger::init();
+    libs::olean::init();
     libs::session::init();
 
     tokio::spawn(service::rsync::main().map(Result::unwrap));

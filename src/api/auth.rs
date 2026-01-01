@@ -205,7 +205,7 @@ async fn register(
         password,
     }) = req?;
 
-    if !check_username(&username) || !check_uid(&identifier) || check_email(&email).is_none() {
+    if !check_username(&username) || !check_uid(&identifier) || check_email(&email).is_none() || password.len() != 43 || !password.is_ascii() {
         bad!(BYTES_NULL)
     }
 

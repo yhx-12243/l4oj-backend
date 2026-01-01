@@ -5,6 +5,7 @@ pub mod db;
 pub mod error;
 pub mod fs;
 pub mod logger;
+pub mod olean;
 pub mod preference {
     pub mod server;
 }

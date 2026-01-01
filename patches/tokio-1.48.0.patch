@@ -1,0 +1,196 @@
+diff --git a/src/io/util/buf_reader.rs b/src/io/util/buf_reader.rs
+index c89fe43..ce77d13 100644
+--- a/src/io/util/buf_reader.rs
++++ b/src/io/util/buf_reader.rs
+@@ -95,6 +95,23 @@ impl<R: AsyncRead> BufReader<R> {
+         *me.pos = 0;
+         *me.cap = 0;
+     }
++
++    /// Returns the number of bytes the internal buffer can hold at once.
++    pub fn capacity(&self) -> usize {
++        self.buf.len()
++    }
++
++    pub fn __read_more_internal(&mut self) -> (&mut [u8], &mut usize, &mut R) {
++        (&mut self.buf[self.cap..], &mut self.cap, &mut self.inner)
++    }
++
++    /// Remove bytes that have already been read from the buffer.
++    /// See https://github.com/rust-lang/rust/blob/main/library/std/src/io/buffered/bufreader/buffer.rs#L123-L128.
++    pub fn backshift(&mut self) {
++        self.buf.copy_within(self.pos..self.cap, 0);
++        self.cap -= self.pos;
++        self.pos = 0;
++    }
+ }
+ 
+ impl<R: AsyncRead> AsyncRead for BufReader<R> {
+diff --git a/src/net/unix/split_owned.rs b/src/net/unix/split_owned.rs
+index d1c6f93..9dd406e 100644
+--- a/src/net/unix/split_owned.rs
++++ b/src/net/unix/split_owned.rs
+@@ -33,7 +33,7 @@ cfg_io_util! {
+ /// [`AsyncReadExt`]: trait@crate::io::AsyncReadExt
+ #[derive(Debug)]
+ pub struct OwnedReadHalf {
+-    inner: Arc<UnixStream>,
++    pub(crate) inner: Arc<UnixStream>,
+ }
+ 
+ /// Owned write half of a [`UnixStream`], created by [`into_split`].
+@@ -52,8 +52,8 @@ pub struct OwnedReadHalf {
+ /// [`AsyncWriteExt`]: trait@crate::io::AsyncWriteExt
+ #[derive(Debug)]
+ pub struct OwnedWriteHalf {
+-    inner: Arc<UnixStream>,
+-    shutdown_on_drop: bool,
++    pub(crate) inner: Arc<UnixStream>,
++    pub(crate) shutdown_on_drop: bool,
+ }
+ 
+ pub(crate) fn split_owned(stream: UnixStream) -> (OwnedReadHalf, OwnedWriteHalf) {
+diff --git a/src/net/unix/stream.rs b/src/net/unix/stream.rs
+index 26fe9e4..29373c2 100644
+--- a/src/net/unix/stream.rs
++++ b/src/net/unix/stream.rs
+@@ -19,6 +19,7 @@ use std::os::unix::io::{AsFd, AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, RawFd};
+ use std::os::unix::net::{self, SocketAddr as StdSocketAddr};
+ use std::path::Path;
+ use std::pin::Pin;
++use std::sync::Arc;
+ use std::task::{Context, Poll};
+ 
+ cfg_io_util! {
+@@ -982,6 +983,18 @@ impl UnixStream {
+     pub fn into_split(self) -> (OwnedReadHalf, OwnedWriteHalf) {
+         split_owned(self)
+     }
++
++    pub fn tri_split(self) -> (OwnedReadHalf, OwnedWriteHalf, Arc<Self>) {
++        let arc = Arc::new(self);
++        let read = OwnedReadHalf {
++            inner: Arc::clone(&arc),
++        };
++        let write = OwnedWriteHalf {
++            inner: Arc::clone(&arc),
++            shutdown_on_drop: false,
++        };
++        (read, write, arc)
++    }
+ }
+ 
+ impl TryFrom<net::UnixStream> for UnixStream {
+diff --git a/src/sync/batch_semaphore.rs b/src/sync/batch_semaphore.rs
+index b89a5a9..89bc1f9 100644
+--- a/src/sync/batch_semaphore.rs
++++ b/src/sync/batch_semaphore.rs
+@@ -68,7 +68,7 @@ pub enum TryAcquireError {
+ #[derive(Debug)]
+ pub struct AcquireError(());
+ 
+-pub(crate) struct Acquire<'a> {
++pub struct Acquire<'a> {
+     node: Waiter,
+     semaphore: &'a Semaphore,
+     num_permits: usize,
+@@ -394,7 +394,7 @@ impl Semaphore {
+         }
+     }
+ 
+-    fn poll_acquire(
++    fn poll_acquire<const QUEUE_LIM: usize>(
+         &self,
+         cx: &mut Context<'_>,
+         num_permits: usize,
+@@ -485,6 +485,7 @@ impl Semaphore {
+             )
+         });
+ 
++        let acquired_ = acquired;
+         if node.assign_permits(&mut acquired) {
+             self.add_permits_locked(acquired, waiters);
+             return Poll::Ready(Ok(()));
+@@ -508,6 +509,11 @@ impl Semaphore {
+ 
+         // If the waiter is not already in the wait queue, enqueue it.
+         if !queued {
++            if waiters.queue.len() > QUEUE_LIM {
++                self.add_permits_locked(acquired_, waiters);
++                return Poll::Ready(Err(AcquireError(())))
++            }
++
+             let node = unsafe {
+                 let node = Pin::into_inner_unchecked(node) as *mut _;
+                 NonNull::new_unchecked(node)
+@@ -597,7 +603,7 @@ impl Future for Acquire<'_> {
+         #[cfg(not(all(tokio_unstable, feature = "tracing")))]
+         let coop = ready!(crate::task::coop::poll_proceed(cx));
+ 
+-        let result = match semaphore.poll_acquire(cx, needed, node, *queued) {
++        let result = match semaphore.poll_acquire::<{ usize::MAX }>(cx, needed, node, *queued) {
+             Poll::Pending => {
+                 *queued = true;
+                 Poll::Pending
+@@ -681,6 +687,14 @@ impl<'a> Acquire<'a> {
+             )
+         }
+     }
++
++    pub fn poll_lim<const QUEUE_LIM: usize>(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), AcquireError>> {
++        let (node, semaphore, needed, queued) = self.project();
++
++        let result = semaphore.poll_acquire::<QUEUE_LIM>(cx, needed, node, *queued);
++        *queued = result.is_pending();
++        result
++    }
+ }
+ 
+ impl Drop for Acquire<'_> {
+diff --git a/src/sync/semaphore.rs b/src/sync/semaphore.rs
+index 8af5b54..1b7fa21 100644
+--- a/src/sync/semaphore.rs
++++ b/src/sync/semaphore.rs
+@@ -411,8 +411,8 @@ pub struct Semaphore {
+ #[clippy::has_significant_drop]
+ #[derive(Debug)]
+ pub struct SemaphorePermit<'a> {
+-    sem: &'a Semaphore,
+-    permits: u32,
++    pub sem: &'a Semaphore,
++    pub permits: u32,
+ }
+ 
+ /// An owned permit from the semaphore.
+@@ -968,6 +968,10 @@ impl Semaphore {
+     pub fn is_closed(&self) -> bool {
+         self.ll_sem.is_closed()
+     }
++
++    pub fn raw_acquire(&self, n: usize) -> ll::Acquire {
++        self.ll_sem.acquire(n)
++    }
+ }
+ 
+ impl<'a> SemaphorePermit<'a> {
+diff --git a/src/util/linked_list.rs b/src/util/linked_list.rs
+index 3650f87..a19ffe9 100644
+--- a/src/util/linked_list.rs
++++ b/src/util/linked_list.rs
+@@ -187,6 +187,16 @@ impl<L: Link> LinkedList<L, L::Target> {
+         true
+     }
+ 
++    pub(crate) fn len(&self) -> usize {
++        let mut count = 0;
++        let mut u = self.head;
++        while let Some(target) = u {
++            u = unsafe { L::pointers(target).as_ref() }.get_next();
++            count += 1;
++        }
++        count
++    }
++
+     /// Removes the specified node from the list
+     ///
+     /// # Safety

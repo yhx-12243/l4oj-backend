@@ -4,7 +4,15 @@ use compact_str::CompactString;
 use http::StatusCode;
 use serde::{Deserialize, Serialize};
 
-use crate::{libs::{db::get_connection, request::JsonReqult, response::JkmxJsonResponse, serde::{UnitMap, WithJson}}, models::user::User};
+use crate::{
+    libs::{
+        db::get_connection,
+        request::JsonReqult,
+        response::JkmxJsonResponse,
+        serde::{UnitMap, WithJson},
+    },
+    models::user::User,
+};
 
 #[derive(Deserialize)]
 struct GetUserListRequest {

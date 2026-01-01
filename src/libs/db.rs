@@ -6,7 +6,7 @@ use tokio_postgres::{
     types::{FromSql, IsNull, Kind, ToSql, Type, to_sql_checked},
 };
 
-use crate::libs::error::{BoxedStdError, StdError};
+use super::error::{BoxedStdError, StdError};
 
 pub type ConnectionManager = PostgresConnectionManager<NoTls>;
 pub type Pool = bb8::Pool<ConnectionManager>;

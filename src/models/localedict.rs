@@ -35,7 +35,7 @@ pub struct LocaleDictEntryOwned {
 impl FromIterator<LocaleDictEntryOwned> for LocaleDict {
     fn from_iter<I>(iter: I) -> Self
     where
-        I: IntoIterator<Item = LocaleDictEntryOwned>
+        I: IntoIterator<Item = LocaleDictEntryOwned>,
     {
         Self(
             iter.into_iter()
