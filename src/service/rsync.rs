@@ -37,7 +37,7 @@ fn protocol_version(s: &str) -> Option<u32> {
 
 #[inline]
 fn check_password(password: &[u8; 43], salt: &[Char; 16], response: Option<&str>) -> bool {
-    let found: &[u8; 43] = if let Some(a) = response && let Some(b) = a.as_bytes().as_array::<43>() {
+    let found = if let Some(a) = response && let Some(b) = a.as_bytes().as_array::<43>() {
         b
     } else {
         return false;
@@ -110,11 +110,10 @@ async fn main_inner(
 }
 
 async fn handle(mut socket: UnixStream) {
-    let _ = socket.write_all(b"@RSYNCD: 32.0 sha256\n@RSYNCD: AUTHREQD ").await;
     let buf = gen_random_ascii::<16>();
+    let _ = socket.write_all(b"@RSYNCD: 32.0 sha256\n@RSYNCD: AUTHREQD ").await;
     let _ = socket.write_all(buf.as_bytes()).await;
     let _ = socket.write_all(b"\n@RSYNCD: OK\n\x81\xfe\x04sha1\0\0\0\0").await;
-    let _ = socket.flush().await;
     let (c2s, s2c, mut socket) = socket.tri_split();
     let res = main_inner(c2s, s2c, buf).await;
     let socket = unsafe { std::sync::Arc::get_mut_unchecked(&mut socket) };

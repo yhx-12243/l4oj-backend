@@ -1,6 +1,16 @@
-use core::{mem::MaybeUninit, ptr, slice, str::pattern::Pattern};
-use std::{fs, os::fd::AsRawFd, path::PathBuf, str::pattern::Searcher};
+use core::{
+    mem::{DropGuard, MaybeUninit},
+    ptr, slice,
+    str::pattern::Pattern,
+};
+use std::{
+    fs, io,
+    os::fd::{AsRawFd, RawFd},
+    path::PathBuf,
+    str::pattern::Searcher,
+};
 
+use tempfile::Builder;
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader, BufWriter, simplex},
     net::unix::{OwnedReadHalf, OwnedWriteHalf},
@@ -11,12 +21,13 @@ use super::{
     file_entry::FileEntry, io::ReadVarintRsync, jumping::Jumping, multiplex::c2s_multiplex,
 };
 use crate::{
-    libs::{error::BoxedStdError, validate::is_lean_id},
+    libs::{error::BoxedStdError, fs::mkdir, olean::lean_version, validate::is_lean_id},
     models::user::User,
 };
 
 const SINGLE_FILE_LIMIT: usize = 0x100_0000; // 16 MB
 const TOTAL_FILE_LIMIT: usize = 0x4000_0000; // 1 GB
+const TOTAL_FILE_NUM: usize = 0x10_0000; // 1 M
 
 fn check_prefix(prefix: &[u8]) -> bool {
     const B: &[u8] = b"/.lake/build/lib/lean/";
@@ -113,12 +124,15 @@ where
         }
         let mut path = Vec::with_capacity(s.len() + 1);
         path.extend_from_slice(&s);
-        unsafe { path.as_mut_ptr().add(path.len()).write(0); }
+        unsafe { path.as_mut_ptr().add(path.len()).write(0); } // make it NUL-terminated to be friendly with C.
         ret.push(FileEntry { path, size: size as usize, sha1, enabled, mode });
+        if ret.len() > TOTAL_FILE_NUM {
+            return Err("too many files".into());
+        }
     }
 }
 
-async fn receive<R>(mut rx: R, fl: &mut [FileEntry]) -> Result<(), BoxedStdError>
+async fn receive<R>(mut rx: R, fl: &mut [FileEntry], dir: RawFd) -> Result<(), BoxedStdError>
 where
     R: AsyncRead + Unpin,
 {
@@ -126,6 +140,7 @@ where
     let mut buf = [MaybeUninit::<u8>::uninit(); 24];
     let buf18 = unsafe { slice::from_raw_parts_mut(buf.as_mut_ptr().cast(), 18) };
     let buf20 = unsafe { slice::from_raw_parts_mut(buf.as_mut_ptr().cast(), 20) };
+    let tb = Builder::new();
     loop {
         let idx = match state.recv(&mut rx).await {
             Ok(i) => i,
@@ -138,17 +153,51 @@ where
         if entry.enabled == 0 {
             return Err(format!("I don't want file #{idx}").into());
         }
-        entry.enabled = 0;
         rx.read_exact(buf18).await?;
         tracing::debug!(target: "lean4rsync-writer", "\x1b[35mfile receiving: {entry:?}\x1b[0m");
+
+        let target = unsafe { entry.path.get_unchecked_mut(entry.enabled..) };
+        mkdir(target, dir)?;
+        entry.enabled = 0;
+        let f = tb.tempfile_in(env!("LEAN4OJ_RSYNC_TMPDIR"))?;
+        f.as_file().set_len(entry.size as u64)?;
+        let (mut buf, g) = unsafe {
+            let raw = libc::mmap(
+                ptr::null_mut(), entry.size, libc::PROT_WRITE,
+                libc::MAP_SHARED, f.as_raw_fd(), 0,
+            );
+            (
+                slice::from_raw_parts_mut(raw.cast(), entry.size),
+                DropGuard::new((raw as usize, entry.size), |(ptr, size)| { libc::munmap(ptr as _, size); }),
+            )
+        };
         loop {
             let size = rx.read_u32_le().await?;
             if size == 0 {
                 break;
             }
-            let mut w = vec![0u8; size as usize];
-            rx.read_exact(&mut w).await?;
-            println!("{} {:?}", w.len(), w[..w.len().min(80)].utf8_chunks().debug());
+            let Some(chunk) = buf.split_off_mut(..size as usize) else {
+                return Err(format!("chunk too large: {size} / {}", buf.len()).into());
+            };
+            rx.read_exact(chunk).await?;
+        }
+        if !buf.is_empty() {
+            return Err(format!("{} bytes missing", buf.len()).into());
+        }
+        let buf = unsafe { slice::from_raw_parts(g.0 as *const u8, entry.size) };
+        if lean_version(buf).is_none() {
+            return Err("not a valid Lean olean file".into());
+        }
+        drop(g);
+        let (file, path) = f.into_parts();
+        drop(file);
+        let mut path = path.into_inner().into_path_buf().into_os_string().into_encoded_bytes();
+        path.push(0);
+        // println!("path = {:?} -> {:?}[{}..]", path.utf8_debug().debug(), entry.path.utf8_debug().debug());
+        unsafe {
+            if libc::renameat(libc::AT_FDCWD, path.as_ptr().cast(), dir, target.as_ptr().cast()) != 0 {
+                return Err(io::Error::last_os_error().into());
+            }
         }
         rx.read_exact(buf20).await?;
     }
@@ -211,7 +260,7 @@ pub async fn main(
     s2c.write_all(&buf).await?;
     s2c.flush().await?;
 
-    receive(&mut rx, &mut fl).await?;
+    receive(&mut rx, &mut fl, base_dir_fd.as_raw_fd()).await?;
 
     s2c.write_all(b"\x04\0\0\x07\0\0\0\0").await?;
     s2c.flush().await.map_err(Into::into)

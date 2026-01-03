@@ -51,7 +51,7 @@ index d1c6f93..9dd406e 100644
  
  pub(crate) fn split_owned(stream: UnixStream) -> (OwnedReadHalf, OwnedWriteHalf) {
 diff --git a/src/net/unix/stream.rs b/src/net/unix/stream.rs
-index 26fe9e4..29373c2 100644
+index 2391d54..60ea2db 100644
 --- a/src/net/unix/stream.rs
 +++ b/src/net/unix/stream.rs
 @@ -19,6 +19,7 @@ use std::os::unix::io::{AsFd, AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, RawFd};
@@ -82,7 +82,7 @@ index 26fe9e4..29373c2 100644
  
  impl TryFrom<net::UnixStream> for UnixStream {
 diff --git a/src/sync/batch_semaphore.rs b/src/sync/batch_semaphore.rs
-index b89a5a9..89bc1f9 100644
+index 8662af3..471a6b5 100644
 --- a/src/sync/batch_semaphore.rs
 +++ b/src/sync/batch_semaphore.rs
 @@ -68,7 +68,7 @@ pub enum TryAcquireError {
@@ -174,10 +174,10 @@ index 8af5b54..1b7fa21 100644
  
  impl<'a> SemaphorePermit<'a> {
 diff --git a/src/util/linked_list.rs b/src/util/linked_list.rs
-index 3650f87..a19ffe9 100644
+index eba767f..ca8be05 100644
 --- a/src/util/linked_list.rs
 +++ b/src/util/linked_list.rs
-@@ -187,6 +187,16 @@ impl<L: Link> LinkedList<L, L::Target> {
+@@ -196,6 +196,16 @@ impl<L: Link> LinkedList<L, L::Target> {
          true
      }
  

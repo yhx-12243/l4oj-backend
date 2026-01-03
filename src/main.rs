@@ -70,6 +70,7 @@
     // pattern_type_range_trait,
     postfix_match,
     ptr_as_ref_unchecked,
+    ptr_cast_array,
     // ptr_metadata,
     result_option_map_or_default,
     rustc_attrs,
@@ -111,7 +112,7 @@ mod service;
 
 #[tokio::main]
 async fn main() -> std::io::Result<!> {
-    use axum::{Router, extract::DefaultBodyLimit, routing::get};
+    use axum::{Router, extract::DefaultBodyLimit};
     use futures_util::FutureExt;
     use hyper::server::conn;
     use hyper_util::rt::TokioIo;
@@ -130,8 +131,8 @@ async fn main() -> std::io::Result<!> {
     tokio::spawn(service::rsync::main().map(Result::unwrap));
 
     let mut app: Router = Router::new()
-        .nest("/api", api::all())
-        .route("/lean{*path}", get(api::fs::static_with_permission));
+        .nest("/api", api::all());
+        // .route("/lean{*path}", get(api::fs::static_with_permission));
 
     app = app.layer(DefaultBodyLimit::disable());
 
