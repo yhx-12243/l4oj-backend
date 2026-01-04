@@ -21,7 +21,7 @@ use super::{
     file_entry::FileEntry, io::ReadVarintRsync, jumping::Jumping, multiplex::c2s_multiplex,
 };
 use crate::{
-    libs::{error::BoxedStdError, fs::mkdir, olean::lean_version, validate::is_lean_id},
+    libs::{error::BoxedStdError, fs::{mkdir, unmap_send}, olean::lean_version, validate::is_lean_id},
     models::user::User,
 };
 
@@ -58,7 +58,7 @@ fn check_path(path: &[u8], uid: &str) -> usize {
     }
 }
 
-async fn generate_file_list<R>(mut rx: R, uid: &str) -> Result<Vec<FileEntry>, BoxedStdError>
+async fn generate_file_list<R>(mut rx: R, uid: &str, limit: usize) -> Result<Vec<FileEntry>, BoxedStdError>
 where
     R: AsyncRead + Unpin,
 {
@@ -111,10 +111,13 @@ where
         match mode & libc::S_IFMT {
             | libc::S_IFREG => {
                 rx.read_exact(&mut sha1).await?;
-                if size as usize <= SINGLE_FILE_LIMIT && acc + size as usize <= TOTAL_FILE_LIMIT {
+                if size as usize <= SINGLE_FILE_LIMIT {
                     enabled = check_path(&s, uid);
                     if enabled != 0 {
                         acc += size as usize;
+                        if acc > limit {
+                            return Err("Total file size limit exceeds 1 GB. Please contact server administrator for a larger capacity.".into());
+                        }
                     }
                 }
             }
@@ -159,16 +162,21 @@ where
         let target = unsafe { entry.path.get_unchecked_mut(entry.enabled..) };
         mkdir(target, dir)?;
         entry.enabled = 0;
-        let f = tb.tempfile_in(env!("LEAN4OJ_RSYNC_TMPDIR"))?;
-        f.as_file().set_len(entry.size as u64)?;
+        cfg_select! {
+            target_os = "linux" => {
+                let f = tempfile::tempfile_in(env!("LEAN4OJ_RSYNC_TMPDIR"))?;
+                f.set_len(entry.size as u64)?;
+            }
+            _ => {
+                let f = tb.tempfile_in(env!("LEAN4OJ_RSYNC_TMPDIR"))?;
+                f.as_file().set_len(entry.size as u64)?;
+            }
+        }
         let (mut buf, g) = unsafe {
-            let raw = libc::mmap(
-                ptr::null_mut(), entry.size, libc::PROT_WRITE,
-                libc::MAP_SHARED, f.as_raw_fd(), 0,
-            );
+            let raw = libc::mmap(ptr::null_mut(), entry.size, libc::PROT_WRITE, libc::MAP_SHARED, f.as_raw_fd(), 0);
             (
                 slice::from_raw_parts_mut(raw.cast(), entry.size),
-                DropGuard::new((raw as usize, entry.size), |(ptr, size)| { libc::munmap(ptr as _, size); }),
+                DropGuard::new((raw as usize, entry.size), unmap_send),
             )
         };
         loop {
@@ -189,11 +197,17 @@ where
             return Err("not a valid Lean olean file".into());
         }
         drop(g);
-        let (file, path) = f.into_parts();
-        drop(file);
+        cfg_select! {
+            target_os = "linux" => {
+                let path = tb.make_in(env!("LEAN4OJ_RSYNC_TMPDIR"), crate::libs::fs::LinuxPersist::new(f.as_raw_fd()))?.into_temp_path();
+                drop(f);
+            }
+            _ => {
+                let path = f.into_temp_path();
+            }
+        }
         let mut path = path.into_inner().into_path_buf().into_os_string().into_encoded_bytes();
         path.push(0);
-        // println!("path = {:?} -> {:?}[{}..]", path.utf8_debug().debug(), entry.path.utf8_debug().debug());
         unsafe {
             if libc::renameat(libc::AT_FDCWD, path.as_ptr().cast(), dir, target.as_ptr().cast()) != 0 {
                 return Err(io::Error::last_os_error().into());
@@ -220,7 +234,8 @@ pub async fn main(
     handler[7] = Some(tx);
     spawn(c2s_multiplex(c2s, handler));
 
-    let mut fl = generate_file_list(&mut rx, &user.uid).await?;
+    // TODO: release limit to usize::MAX for VIP users.
+    let mut fl = generate_file_list(&mut rx, &user.uid, TOTAL_FILE_LIMIT).await?;
     fl.sort();
     let base_dir = PathBuf::from(format!(".internal/lean/{}", user.uid));
     if let Err(e) = fs::create_dir(&*base_dir) && e.raw_os_error() != Some(libc::EEXIST) {

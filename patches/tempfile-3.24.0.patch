@@ -1,0 +1,33 @@
+diff --git a/src/file/mod.rs b/src/file/mod.rs
+index b3d51c3..4a8fb3b 100644
+--- a/src/file/mod.rs
++++ b/src/file/mod.rs
+@@ -314,6 +314,10 @@ impl TempPath {
+         }
+     }
+ 
++    pub fn into_inner(self) -> Box<Path> {
++        unsafe { core::ptr::read(&raw const core::mem::ManuallyDrop::new(self).path) }
++    }
++
+     /// Disable cleanup of the temporary file. If `disable_cleanup` is `true`, the temporary file
+     /// will not be deleted when this `TempPath` is dropped. This method is equivalent to calling
+     /// [`Builder::disable_cleanup`] when creating the original `NamedTempFile`, which see for
+diff --git a/src/util.rs b/src/util.rs
+index 2ac9bea..fc488c2 100644
+--- a/src/util.rs
++++ b/src/util.rs
+@@ -64,7 +64,12 @@ pub fn create_helper<R>(
+         }
+         let _ = i; // avoid unused variable warning for the above.
+ 
+-        let path = base.join(tmpname(&mut rng, prefix, suffix, random_len));
++        let mut path = base.join(tmpname(&mut rng, prefix, suffix, random_len));
++        path.reserve(1);
++        {
++            let p = &raw mut *path as *mut [u8];
++            unsafe { (p as *mut u8).add(p.len()).write(0); }
++        }
+         return match f(path) {
+             Err(ref e) if e.kind() == io::ErrorKind::AlreadyExists && num_retries > 1 => continue,
+             // AddrInUse can happen if we're creating a UNIX domain socket and

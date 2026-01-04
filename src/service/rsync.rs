@@ -118,7 +118,7 @@ async fn handle(mut socket: UnixStream) {
     let res = main_inner(c2s, s2c, buf).await;
     let socket = unsafe { std::sync::Arc::get_mut_unchecked(&mut socket) };
     if let Err(e) = res {
-        tracing::warn!(target: "lean4rsync", "failed to handle rsync client: {e:?}");
+        tracing::info!(target: "lean4rsync", "failed to handle rsync client: {e:?}");
 
         let mut e = serialize_err(&*e);
         e.truncate(0x00ff_fffe);
@@ -126,7 +126,6 @@ async fn handle(mut socket: UnixStream) {
         let flag = e.len() as u32 | 0x0a00_0000;
         let _ = socket.write_u32_le(flag).await;
         let _ = socket.write_all(&e).await;
-        let _ = socket.flush().await;
     }
     let _ = socket.shutdown().await;
 }

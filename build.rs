@@ -1,6 +1,6 @@
 use std::{
     fs,
-    path::Path,
+    path::{Path, PathBuf},
     process::{Command, Output},
 };
 
@@ -28,7 +28,9 @@ fn main() {
     println!("cargo::rustc-env=SERVER_VERSION_DATE={date}");
     let home = std::env::home_dir().unwrap();
     let tmp = std::env::temp_dir();
-    let dir = if compatible(&*home, &*tmp) {
+    let dir = if let Some(d) = std::env::var_os("LEAN4OJ_RSYNC_TMPDIR") {
+        PathBuf::from(d)
+    } else if compatible(&home, &tmp) {
         tmp
     } else {
         ProjectDirs::from("com", "kitsune", "lean4oj").unwrap().cache_dir().to_path_buf()

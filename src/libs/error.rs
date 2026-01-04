@@ -18,8 +18,8 @@ pub fn grad_source(e: &DynStdError) -> Option<&DynStdError> {
         e.io_ref().map(|x| x as &DynStdError)
     } else if let Some(e) = e.downcast_ref::<http::Error>() {
         Some(e.get_ref())
-    // } else if let Some(e) = e.downcast_ref::<rand::rand_core::OsError>() {
-    //     Some(&e.0)
+    } else if let Some(e) = e.downcast_ref::<rand::rand_core::OsError>() {
+        Some(&e.0)
     } else if let Some(e) = e.downcast_ref::<serde_path_to_error::Error<serde_json::Error>>() {
         Some(e.inner())
     } else if let Some(e) = e.downcast_ref::<serde_path_to_error::Error<serde::de::value::Error>>() {
