@@ -1,0 +1,90 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index a1ce517..9527952 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -128,7 +128,7 @@ pre-release-replacements = [
+ default = ["auto-color", "humantime", "regex"]
+ color = ["dep:anstream", "dep:anstyle"]
+ auto-color = ["color", "anstream/auto"]
+-humantime = ["dep:jiff"]
++humantime = ["dep:humantime"]
+ regex = ["env_filter/regex"]
+ kv = ["log/kv"]
+ # Deprecated
+@@ -137,7 +137,7 @@ unstable-kv = ["kv"]
+ [dependencies]
+ log = { version = "0.4.21", features = ["std"] }
+ env_filter = { version = "0.1.0", path = "crates/env_filter", default-features = false }
+-jiff = { version = "0.2.3", default-features = false, features = ["std"], optional = true }
++humantime = { version = "2.0.0", optional = true }
+ anstream = { version = "0.6.11", default-features = false, features = ["wincon"], optional = true }
+ anstyle = { version = "1.0.6", optional = true }
+ 
+diff --git a/src/fmt/humantime.rs b/src/fmt/humantime.rs
+index a6bab88..ff723be 100644
+--- a/src/fmt/humantime.rs
++++ b/src/fmt/humantime.rs
+@@ -1,6 +1,10 @@
+ use std::fmt;
+ use std::time::SystemTime;
+ 
++use humantime::{
++    format_rfc3339_micros, format_rfc3339_millis, format_rfc3339_nanos, format_rfc3339_seconds,
++};
++
+ use crate::fmt::{Formatter, TimestampPrecision};
+ 
+ impl Formatter {
+@@ -95,16 +99,14 @@ impl fmt::Debug for Timestamp {
+ 
+ impl fmt::Display for Timestamp {
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+-        let Ok(ts) = jiff::Timestamp::try_from(self.time) else {
+-            return Err(fmt::Error);
++        let formatter = match self.precision {
++            TimestampPrecision::Seconds => format_rfc3339_seconds,
++            TimestampPrecision::Millis => format_rfc3339_millis,
++            TimestampPrecision::Micros => format_rfc3339_micros,
++            TimestampPrecision::Nanos => format_rfc3339_nanos,
+         };
+ 
+-        match self.precision {
+-            TimestampPrecision::Seconds => write!(f, "{ts:.0}"),
+-            TimestampPrecision::Millis => write!(f, "{ts:.3}"),
+-            TimestampPrecision::Micros => write!(f, "{ts:.6}"),
+-            TimestampPrecision::Nanos => write!(f, "{ts:.9}"),
+-        }
++        formatter(self.time).fmt(f)
+     }
+ }
+ 
+diff --git a/src/fmt/mod.rs b/src/fmt/mod.rs
+index 398dab7..fbb3bd7 100644
+--- a/src/fmt/mod.rs
++++ b/src/fmt/mod.rs
+@@ -278,16 +278,16 @@ type StyledValue<T> = T;
+ /// A [custom format][crate::Builder::format] with settings for which fields to show
+ pub struct ConfigurableFormat {
+     // This format needs to work with any combination of crate features.
+-    pub(crate) timestamp: Option<TimestampPrecision>,
+-    pub(crate) module_path: bool,
+-    pub(crate) target: bool,
+-    pub(crate) level: bool,
+-    pub(crate) source_file: bool,
+-    pub(crate) source_line_number: bool,
+-    pub(crate) indent: Option<usize>,
+-    pub(crate) suffix: &'static str,
++    pub timestamp: Option<TimestampPrecision>,
++    pub module_path: bool,
++    pub target: bool,
++    pub level: bool,
++    pub source_file: bool,
++    pub source_line_number: bool,
++    pub indent: Option<usize>,
++    pub suffix: &'static str,
+     #[cfg(feature = "kv")]
+-    pub(crate) kv_format: Option<Box<KvFormatFn>>,
++    pub kv_format: Option<Box<KvFormatFn>>,
+ }
+ 
+ impl ConfigurableFormat {

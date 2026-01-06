@@ -1,0 +1,31 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 946e9e2..e500ff2 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -23,7 +23,7 @@ inline-more = ["hashbrown/inline-more"]
+ lock_api = "0.4.12"
+ parking_lot_core = "0.9.10"
+ equivalent = "1.0.1"
+-hashbrown = { version = "0.15.2", default-features = false }
++hashbrown = { version = "0.16", default-features = false }
+ serde = { version = "1.0.217", optional = true, features = ["derive"] }
+ cfg-if = "1.0.0"
+ rayon = { version = "1.10.0", optional = true }
+diff --git a/src/mapref/entry.rs b/src/mapref/entry.rs
+index 6edf542..03dfc3a 100644
+--- a/src/mapref/entry.rs
++++ b/src/mapref/entry.rs
+@@ -188,6 +188,13 @@ impl<'a, K: Eq + Hash, V> OccupiedEntry<'a, K, V> {
+         self.key
+     }
+ 
++    pub fn into_key_ref(self) -> (K, RefMut<'a, K, V>) {
++        unsafe {
++            let (k, v) = self.entry.into_mut();
++            (self.key, RefMut::new(self.shard, k, v))
++        }
++    }
++
+     pub fn key(&self) -> &K {
+         &self.entry.get().0
+     }

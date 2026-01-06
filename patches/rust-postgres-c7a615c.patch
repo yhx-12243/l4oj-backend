@@ -1,0 +1,1730 @@
+diff --git a/postgres-protocol/Cargo.toml b/postgres-protocol/Cargo.toml
+index 6d07df12..54f0df96 100644
+--- a/postgres-protocol/Cargo.toml
++++ b/postgres-protocol/Cargo.toml
+@@ -23,5 +23,4 @@ md-5 = "0.10"
+ memchr = "2.0"
+ rand = "0.9"
+ sha2 = "0.10"
+-stringprep = "0.1"
+ getrandom = { version = "0.3", optional = true }
+diff --git a/postgres-protocol/src/authentication/sasl.rs b/postgres-protocol/src/authentication/sasl.rs
+index 38ea0eed..dfcc1ffd 100644
+--- a/postgres-protocol/src/authentication/sasl.rs
++++ b/postgres-protocol/src/authentication/sasl.rs
+@@ -20,21 +20,6 @@ pub const SCRAM_SHA_256: &str = "SCRAM-SHA-256";
+ /// The identifier of the SCRAM-SHA-256-PLUS SASL authentication mechanism.
+ pub const SCRAM_SHA_256_PLUS: &str = "SCRAM-SHA-256-PLUS";
+ 
+-// since postgres passwords are not required to exclude saslprep-prohibited
+-// characters or even be valid UTF8, we run saslprep if possible and otherwise
+-// return the raw password.
+-fn normalize(pass: &[u8]) -> Vec<u8> {
+-    let pass = match str::from_utf8(pass) {
+-        Ok(pass) => pass,
+-        Err(_) => return pass.to_vec(),
+-    };
+-
+-    match stringprep::saslprep(pass) {
+-        Ok(pass) => pass.into_owned().into_bytes(),
+-        Err(_) => pass.as_bytes().to_vec(),
+-    }
+-}
+-
+ pub(crate) fn hi(str: &[u8], salt: &[u8], i: u32) -> [u8; 32] {
+     let mut hmac =
+         Hmac::<Sha256>::new_from_slice(str).expect("HMAC is able to accept all key sizes");
+@@ -99,10 +84,10 @@ impl ChannelBinding {
+     }
+ }
+ 
+-enum State {
++enum State<'a> {
+     Update {
+         nonce: String,
+-        password: Vec<u8>,
++        password: &'a [u8],
+         channel_binding: ChannelBinding,
+     },
+     Finish {
+@@ -127,14 +112,14 @@ enum State {
+ ///
+ /// The server will reply with an `AuthenticationSASLFinal` message. Its contents should be passed
+ /// to the `finish()` method, after which the authentication process is complete.
+-pub struct ScramSha256 {
++pub struct ScramSha256<'a> {
+     message: String,
+-    state: State,
++    state: State<'a>,
+ }
+ 
+-impl ScramSha256 {
++impl ScramSha256<'_> {
+     /// Constructs a new instance which will use the provided password for authentication.
+-    pub fn new(password: &[u8], channel_binding: ChannelBinding) -> ScramSha256 {
++    pub fn new(password: &[u8], channel_binding: ChannelBinding) -> ScramSha256<'_> {
+         // rand 0.5's ThreadRng is cryptographically secure
+         let mut rng = rand::rng();
+         let nonce = (0..NONCE_LENGTH)
+@@ -150,12 +135,12 @@ impl ScramSha256 {
+         ScramSha256::new_inner(password, channel_binding, nonce)
+     }
+ 
+-    fn new_inner(password: &[u8], channel_binding: ChannelBinding, nonce: String) -> ScramSha256 {
++    fn new_inner(password: &[u8], channel_binding: ChannelBinding, nonce: String) -> ScramSha256<'_> {
+         ScramSha256 {
+             message: format!("{}n=,r={}", channel_binding.gs2_header(), nonce),
+             state: State::Update {
+                 nonce,
+-                password: normalize(password),
++                password,
+                 channel_binding,
+             },
+         }
+@@ -180,7 +165,7 @@ impl ScramSha256 {
+                     password,
+                     channel_binding,
+                 } => (nonce, password, channel_binding),
+-                _ => return Err(io::Error::other("invalid SCRAM state")),
++                _ => return Err(io::const_error!(io::ErrorKind::Other, "invalid SCRAM state")),
+             };
+ 
+         let message =
+@@ -189,7 +174,7 @@ impl ScramSha256 {
+         let parsed = Parser::new(message).server_first_message()?;
+ 
+         if !parsed.nonce.starts_with(&client_nonce) {
+-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid nonce"));
++            return Err(io::const_error!(io::ErrorKind::InvalidInput, "invalid nonce"));
+         }
+ 
+         let salt = match STANDARD.decode(parsed.salt) {
+@@ -197,7 +182,7 @@ impl ScramSha256 {
+             Err(e) => return Err(io::Error::new(io::ErrorKind::InvalidInput, e)),
+         };
+ 
+-        let salted_password = hi(&password, &salt, parsed.iteration_count);
++        let salted_password = hi(password, &salt, parsed.iteration_count);
+ 
+         let mut hmac = Hmac::<Sha256>::new_from_slice(&salted_password)
+             .expect("HMAC is able to accept all key sizes");
+@@ -252,7 +237,7 @@ impl ScramSha256 {
+                 salted_password,
+                 auth_message,
+             } => (salted_password, auth_message),
+-            _ => return Err(io::Error::other("invalid SCRAM state")),
++            _ => return Err(io::const_error!(io::ErrorKind::Other, "invalid SCRAM state")),
+         };
+ 
+         let message =
+@@ -281,7 +266,7 @@ impl ScramSha256 {
+             .expect("HMAC is able to accept all key sizes");
+         hmac.update(auth_message.as_bytes());
+         hmac.verify_slice(&verifier)
+-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "SCRAM verification error"))
++            .map_err(|_| io::const_error!(io::ErrorKind::InvalidInput, "SCRAM verification error"))
+     }
+ }
+ 
+@@ -306,7 +291,7 @@ impl<'a> Parser<'a> {
+                     format!("unexpected character at byte {i}: expected `{target}` but got `{c}");
+                 Err(io::Error::new(io::ErrorKind::InvalidInput, m))
+             }
+-            None => Err(io::Error::new(
++            None => Err(io::const_error!(
+                 io::ErrorKind::UnexpectedEof,
+                 "unexpected EOF",
+             )),
+diff --git a/postgres-protocol/src/lib.rs b/postgres-protocol/src/lib.rs
+index 82bfb9e9..0ca8989b 100644
+--- a/postgres-protocol/src/lib.rs
++++ b/postgres-protocol/src/lib.rs
+@@ -10,6 +10,7 @@
+ //! This library assumes that the `client_encoding` backend parameter has been
+ //! set to `UTF8`. It will most likely not behave properly if that is not the case.
+ #![warn(missing_docs, rust_2018_idioms, clippy::all)]
++#![feature(io_const_error)]
+ 
+ use byteorder::{BigEndian, ByteOrder};
+ use bytes::{BufMut, BytesMut};
+@@ -61,7 +62,7 @@ macro_rules! from_usize {
+             #[inline]
+             fn from_usize(x: usize) -> io::Result<$t> {
+                 if x > <$t>::MAX as usize {
+-                    Err(io::Error::new(
++                    Err(io::const_error!(
+                         io::ErrorKind::InvalidInput,
+                         "value too large to transmit",
+                     ))
+diff --git a/postgres-protocol/src/message/backend.rs b/postgres-protocol/src/message/backend.rs
+index c25eaa86..74fe275d 100644
+--- a/postgres-protocol/src/message/backend.rs
++++ b/postgres-protocol/src/message/backend.rs
+@@ -51,7 +51,7 @@ impl Header {
+         let len = BigEndian::read_i32(&buf[1..]);
+ 
+         if len < 4 {
+-            return Err(io::Error::new(
++            return Err(io::const_error!(
+                 io::ErrorKind::InvalidData,
+                 "invalid message length: header length < 4",
+             ));
+@@ -120,7 +120,7 @@ impl Message {
+         let len = (&buf[1..5]).read_u32::<BigEndian>().unwrap();
+ 
+         if len < 4 {
+-            return Err(io::Error::new(
++            return Err(io::const_error!(
+                 io::ErrorKind::InvalidInput,
+                 "invalid message length: parsing u32",
+             ));
+@@ -268,7 +268,7 @@ impl Message {
+         };
+ 
+         if !buf.is_empty() {
+-            return Err(io::Error::new(
++            return Err(io::const_error!(
+                 io::ErrorKind::InvalidInput,
+                 "invalid message length: expected buffer to be empty",
+             ));
+@@ -304,7 +304,7 @@ impl Buffer {
+                 self.idx = end + 1;
+                 Ok(cstr)
+             }
+-            None => Err(io::Error::new(
++            None => Err(io::const_error!(
+                 io::ErrorKind::UnexpectedEof,
+                 "unexpected EOF",
+             )),
+@@ -373,7 +373,7 @@ impl<'a> FallibleIterator for SaslMechanisms<'a> {
+         let value_end = find_null(self.0, 0)?;
+         if value_end == 0 {
+             if self.0.len() != 1 {
+-                return Err(io::Error::new(
++                return Err(io::const_error!(
+                     io::ErrorKind::InvalidData,
+                     "invalid message length: expected to be at end of iterator for sasl",
+                 ));
+@@ -485,7 +485,7 @@ impl FallibleIterator for ColumnFormats<'_> {
+             if self.buf.is_empty() {
+                 return Ok(None);
+             } else {
+-                return Err(io::Error::new(
++                return Err(io::const_error!(
+                     io::ErrorKind::InvalidInput,
+                     "invalid message length: wrong column formats",
+                 ));
+@@ -567,7 +567,7 @@ impl FallibleIterator for DataRowRanges<'_> {
+             if self.buf.is_empty() {
+                 return Ok(None);
+             } else {
+-                return Err(io::Error::new(
++                return Err(io::const_error!(
+                     io::ErrorKind::InvalidInput,
+                     "invalid message length: datarowrange is not empty",
+                 ));
+@@ -581,7 +581,7 @@ impl FallibleIterator for DataRowRanges<'_> {
+         } else {
+             let len = len as usize;
+             if self.buf.len() < len {
+-                return Err(io::Error::new(
++                return Err(io::const_error!(
+                     io::ErrorKind::UnexpectedEof,
+                     "unexpected EOF",
+                 ));
+@@ -625,7 +625,7 @@ impl<'a> FallibleIterator for ErrorFields<'a> {
+             if self.buf.is_empty() {
+                 return Ok(None);
+             } else {
+-                return Err(io::Error::new(
++                return Err(io::const_error!(
+                     io::ErrorKind::InvalidInput,
+                     "invalid message length: error fields is not drained",
+                 ));
+@@ -727,7 +727,7 @@ impl FallibleIterator for Parameters<'_> {
+             if self.buf.is_empty() {
+                 return Ok(None);
+             } else {
+-                return Err(io::Error::new(
++                return Err(io::const_error!(
+                     io::ErrorKind::InvalidInput,
+                     "invalid message length: parameters is not drained",
+                 ));
+@@ -803,7 +803,7 @@ impl<'a> FallibleIterator for Fields<'a> {
+             if self.buf.is_empty() {
+                 return Ok(None);
+             } else {
+-                return Err(io::Error::new(
++                return Err(io::const_error!(
+                     io::ErrorKind::InvalidInput,
+                     "invalid message length: field is not drained",
+                 ));
+@@ -890,7 +890,7 @@ impl<'a> Field<'a> {
+ fn find_null(buf: &[u8], start: usize) -> io::Result<usize> {
+     match memchr(0, &buf[start..]) {
+         Some(pos) => Ok(pos + start),
+-        None => Err(io::Error::new(
++        None => Err(io::const_error!(
+             io::ErrorKind::UnexpectedEof,
+             "unexpected EOF",
+         )),
+diff --git a/postgres-protocol/src/message/frontend.rs b/postgres-protocol/src/message/frontend.rs
+index dcfa6425..287c1175 100644
+--- a/postgres-protocol/src/message/frontend.rs
++++ b/postgres-protocol/src/message/frontend.rs
+@@ -146,7 +146,7 @@ where
+             .checked_add(4)
+             .and_then(|l| i32::try_from(l).ok())
+             .ok_or_else(|| {
+-                io::Error::new(io::ErrorKind::InvalidInput, "message length overflow")
++                io::const_error!(io::ErrorKind::InvalidInput, "message length overflow")
+             })?;
+ 
+         Ok(CopyData { buf, len })
+@@ -291,7 +291,7 @@ pub fn terminate(buf: &mut BytesMut) {
+ #[inline]
+ fn write_cstr(s: &[u8], buf: &mut BytesMut) -> Result<(), io::Error> {
+     if s.contains(&0) {
+-        return Err(io::Error::new(
++        return Err(io::const_error!(
+             io::ErrorKind::InvalidInput,
+             "string contains embedded null",
+         ));
+diff --git a/postgres-protocol/src/password/mod.rs b/postgres-protocol/src/password/mod.rs
+index 5f0bbaba..f4c26110 100644
+--- a/postgres-protocol/src/password/mod.rs
++++ b/postgres-protocol/src/password/mod.rs
+@@ -47,20 +47,9 @@ pub(crate) fn scram_sha_256_salt(password: &[u8], salt: [u8; SCRAM_DEFAULT_SALT_
+     // contains prohibited characters (such as non-ASCII whitespace),
+     // just skip the SASLprep step and use the original byte
+     // sequence.
+-    let prepared: Vec<u8> = match std::str::from_utf8(password) {
+-        Ok(password_str) => {
+-            match stringprep::saslprep(password_str) {
+-                Ok(p) => p.into_owned().into_bytes(),
+-                // contains invalid characters; skip saslprep
+-                Err(_) => Vec::from(password),
+-            }
+-        }
+-        // not valid UTF-8; skip saslprep
+-        Err(_) => Vec::from(password),
+-    };
+ 
+     // salt password
+-    let salted_password = sasl::hi(&prepared, &salt, SCRAM_DEFAULT_ITERATIONS);
++    let salted_password = sasl::hi(password, &salt, SCRAM_DEFAULT_ITERATIONS);
+ 
+     // client key
+     let mut hmac = Hmac::<Sha256>::new_from_slice(&salted_password)
+diff --git a/postgres-types/src/lib.rs b/postgres-types/src/lib.rs
+index 9da20c52..dd1953c1 100644
+--- a/postgres-types/src/lib.rs
++++ b/postgres-types/src/lib.rs
+@@ -756,7 +756,7 @@ simple_from!(bool, bool_from_sql, BOOL);
+ simple_from!(i8, char_from_sql, CHAR);
+ simple_from!(i16, int2_from_sql, INT2);
+ simple_from!(i32, int4_from_sql, INT4);
+-simple_from!(u32, oid_from_sql, OID);
++simple_from!(u32, oid_from_sql, OID, XID);
+ simple_from!(i64, int8_from_sql, INT8);
+ simple_from!(f32, float4_from_sql, FLOAT4);
+ simple_from!(f64, float8_from_sql, FLOAT8);
+diff --git a/postgres/src/transaction.rs b/postgres/src/transaction.rs
+index 8126b1db..f2ca0de6 100644
+--- a/postgres/src/transaction.rs
++++ b/postgres/src/transaction.rs
+@@ -181,12 +181,11 @@ impl<'a> Transaction<'a> {
+         portal: &Portal,
+         max_rows: i32,
+     ) -> Result<RowIter<'_>, Error> {
+-        let stream = self.connection.block_on(
+-            self.transaction
+-                .as_ref()
+-                .unwrap()
+-                .query_portal_raw(portal, max_rows),
+-        )?;
++        let stream = self
++            .transaction
++            .as_ref()
++            .unwrap()
++            .query_portal_raw(portal, max_rows)?;
+         Ok(RowIter::new(self.connection.as_ref(), stream))
+     }
+ 
+diff --git a/tokio-postgres/Cargo.toml b/tokio-postgres/Cargo.toml
+index 4db1ca60..a8db8856 100644
+--- a/tokio-postgres/Cargo.toml
++++ b/tokio-postgres/Cargo.toml
+@@ -2,14 +2,14 @@
+ name = "tokio-postgres"
+ version = "0.7.15"
+ authors = ["Steven Fackler <sfackler@gmail.com>"]
+-edition = "2021"
++edition = "2024"
+ license = "MIT OR Apache-2.0"
+ description = "A native, asynchronous PostgreSQL client"
+ repository = "https://github.com/rust-postgres/rust-postgres"
+ readme = "../README.md"
+ keywords = ["database", "postgres", "postgresql", "sql", "async"]
+ categories = ["database"]
+-rust-version = "1.81"
++rust-version = "1.85"
+ 
+ [lib]
+ test = false
+@@ -47,7 +47,6 @@ with-time-0_3 = ["postgres-types/with-time-0_3"]
+ js = ["postgres-protocol/js", "postgres-types/js"]
+ 
+ [dependencies]
+-async-trait = "0.1"
+ bytes = "1.0"
+ byteorder = "1.0"
+ fallible-iterator = "0.2"
+diff --git a/tokio-postgres/src/binary_copy.rs b/tokio-postgres/src/binary_copy.rs
+index 8c244371..72ed565e 100644
+--- a/tokio-postgres/src/binary_copy.rs
++++ b/tokio-postgres/src/binary_copy.rs
+@@ -49,8 +49,11 @@ impl BinaryCopyInWriter {
+     /// # Panics
+     ///
+     /// Panics if the number of values provided does not match the number expected.
+-    pub async fn write(self: Pin<&mut Self>, values: &[&(dyn ToSql + Sync)]) -> Result<(), Error> {
+-        self.write_raw(slice_iter(values)).await
++    pub fn write(
++        self: Pin<&mut Self>,
++        values: &[&(dyn ToSql + Sync)],
++    ) -> impl std::future::Future<Output = Result<(), Error>> {
++        self.write_raw(slice_iter(values))
+     }
+ 
+     /// A maximally-flexible version of `write`.
+@@ -153,7 +156,7 @@ impl Stream for BinaryCopyOutStream {
+             None => {
+                 check_remaining(&chunk, HEADER_LEN)?;
+                 if !chunk.chunk().starts_with(MAGIC) {
+-                    return Poll::Ready(Some(Err(Error::parse(io::Error::new(
++                    return Poll::Ready(Some(Err(Error::parse(io::const_error!(
+                         io::ErrorKind::InvalidData,
+                         "invalid magic value",
+                     )))));
+@@ -213,7 +216,7 @@ impl Stream for BinaryCopyOutStream {
+ 
+ fn check_remaining(buf: &Cursor<Bytes>, len: usize) -> Result<(), Error> {
+     if buf.remaining() < len {
+-        Err(Error::parse(io::Error::new(
++        Err(Error::parse(io::const_error!(
+             io::ErrorKind::UnexpectedEof,
+             "unexpected EOF",
+         )))
+diff --git a/tokio-postgres/src/cancel_query.rs b/tokio-postgres/src/cancel_query.rs
+index 2dfd47c0..d9c75121 100644
+--- a/tokio-postgres/src/cancel_query.rs
++++ b/tokio-postgres/src/cancel_query.rs
+@@ -18,7 +18,7 @@ where
+     let config = match config {
+         Some(config) => config,
+         None => {
+-            return Err(Error::connect(io::Error::new(
++            return Err(Error::connect(io::const_error!(
+                 io::ErrorKind::InvalidInput,
+                 "unknown host",
+             )))
+diff --git a/tokio-postgres/src/cancel_token.rs b/tokio-postgres/src/cancel_token.rs
+index 1652bec7..8edc1e0f 100644
+--- a/tokio-postgres/src/cancel_token.rs
++++ b/tokio-postgres/src/cancel_token.rs
+@@ -31,7 +31,7 @@ impl CancelToken {
+     ///
+     /// Requires the `runtime` Cargo feature (enabled by default).
+     #[cfg(feature = "runtime")]
+-    pub async fn cancel_query<T>(&self, tls: T) -> Result<(), Error>
++    pub fn cancel_query<T>(&self, tls: T) -> impl std::future::Future<Output = Result<(), Error>>
+     where
+         T: MakeTlsConnect<Socket>,
+     {
+@@ -43,12 +43,15 @@ impl CancelToken {
+             self.process_id,
+             self.secret_key,
+         )
+-        .await
+     }
+ 
+     /// Like `cancel_query`, but uses a stream which is already connected to the server rather than opening a new
+     /// connection itself.
+-    pub async fn cancel_query_raw<S, T>(&self, stream: S, tls: T) -> Result<(), Error>
++    pub fn cancel_query_raw<S, T>(
++        &self,
++        stream: S,
++        tls: T,
++    ) -> impl std::future::Future<Output = Result<(), Error>>
+     where
+         S: AsyncRead + AsyncWrite + Unpin,
+         T: TlsConnect<S>,
+@@ -62,6 +65,5 @@ impl CancelToken {
+             self.process_id,
+             self.secret_key,
+         )
+-        .await
+     }
+ }
+diff --git a/tokio-postgres/src/client.rs b/tokio-postgres/src/client.rs
+index 30ddba27..8e6e11db 100644
+--- a/tokio-postgres/src/client.rs
++++ b/tokio-postgres/src/client.rs
+@@ -19,12 +19,16 @@ use crate::{
+ use bytes::{Buf, BytesMut};
+ use fallible_iterator::FallibleIterator;
+ use futures_channel::mpsc;
+-use futures_util::{StreamExt, TryStreamExt};
++use futures_util::{FutureExt, StreamExt, TryStreamExt};
+ use parking_lot::Mutex;
+ use postgres_protocol::message::backend::Message;
+ use postgres_protocol::message::frontend;
+ use postgres_types::BorrowToSql;
+-use std::collections::HashMap;
++use std::borrow::Cow;
++use std::collections::hash_map::{
++    Entry::{Occupied, Vacant},
++    HashMap,
++};
+ use std::fmt;
+ use std::future;
+ #[cfg(feature = "runtime")]
+@@ -59,8 +63,8 @@ impl Responses {
+         }
+     }
+ 
+-    pub async fn next(&mut self) -> Result<Message, Error> {
+-        future::poll_fn(|cx| self.poll_next(cx)).await
++    pub fn next(&mut self) -> impl Future<Output = Result<Message, Error>> {
++        future::poll_fn(move |cx| self.poll_next(cx))
+     }
+ }
+ 
+@@ -186,6 +190,7 @@ pub struct Client {
+     ssl_negotiation: SslNegotiation,
+     process_id: i32,
+     secret_key: i32,
++    parsed_statements: HashMap<Cow<'static, str>, Statement>,
+ }
+ 
+ impl Client {
+@@ -208,6 +213,7 @@ impl Client {
+             ssl_negotiation,
+             process_id,
+             secret_key,
++            parsed_statements: HashMap::new(),
+         }
+     }
+ 
+@@ -220,24 +226,58 @@ impl Client {
+         self.socket_config = Some(socket_config);
+     }
+ 
++    #[inline]
++    pub fn get_type(&self, oid: Oid) -> impl Future<Output = Result<Type, Error>> {
++        crate::prepare::get_type(&self.inner, oid)
++    }
++
++    pub async fn prepare_static(&mut self, query: Cow<'static, str>) -> Result<Statement, Error> {
++        match self.parsed_statements.entry(query) {
++            Occupied(stmt) => {
++                log::debug!(
++                    "\x1b[32mstmt \x1b[{}m{:?}\x1b[32m already prepared ! => {:?}\x1b[0m",
++                    match stmt.key() {
++                        Cow::Borrowed(_) => 33,
++                        _ => 36,
++                    },
++                    stmt.key(),
++                    stmt.get() as *const Statement
++                );
++                Ok(stmt.get().clone())
++            }
++            Vacant(pos) => {
++                let stmt = prepare::prepare(&self.inner, pos.key(), &[]).await?;
++                log::debug!(
++                    "\x1b[35mstmt \x1b[{}m{:?}\x1b[35m inserted !\x1b[0m",
++                    match pos.key() {
++                        Cow::Borrowed(_) => 33,
++                        _ => 36,
++                    },
++                    pos.key()
++                );
++                Ok(pos.insert(stmt).clone())
++            }
++        }
++    }
++
+     /// Creates a new prepared statement.
+     ///
+     /// Prepared statements can be executed repeatedly, and may contain query parameters (indicated by `$1`, `$2`, etc),
+     /// which are set when executed. Prepared statements can only be used with the connection that created them.
+-    pub async fn prepare(&self, query: &str) -> Result<Statement, Error> {
+-        self.prepare_typed(query, &[]).await
++    pub fn prepare(&self, query: &str) -> impl Future<Output = Result<Statement, Error>> {
++        self.prepare_typed(query, &[])
+     }
+ 
+     /// Like `prepare`, but allows the types of query parameters to be explicitly specified.
+     ///
+     /// The list of types may be smaller than the number of parameters - the types of the remaining parameters will be
+     /// inferred. For example, `client.prepare_typed(query, &[])` is equivalent to `client.prepare(query)`.
+-    pub async fn prepare_typed(
++    pub fn prepare_typed(
+         &self,
+         query: &str,
+         parameter_types: &[Type],
+-    ) -> Result<Statement, Error> {
+-        prepare::prepare(&self.inner, query, parameter_types).await
++    ) -> impl Future<Output = Result<Statement, Error>> {
++        prepare::prepare(&self.inner, query, parameter_types)
+     }
+ 
+     /// Executes a statement, returning a vector of the resulting rows.
+@@ -424,12 +464,16 @@ impl Client {
+     /// # Ok(())
+     /// # }
+     /// ```
+-    pub async fn query_typed_raw<P, I>(&self, query: &str, params: I) -> Result<RowStream, Error>
++    pub fn query_typed_raw<P, I>(
++        &self,
++        query: &str,
++        params: I,
++    ) -> impl Future<Output = Result<RowStream, Error>>
+     where
+         P: BorrowToSql,
+         I: IntoIterator<Item = (P, Type)>,
+     {
+-        query::query_typed(&self.inner, query, params).await
++        query::query_typed(&self.inner, query, params)
+     }
+ 
+     /// Executes a statement, returning the number of rows modified.
+@@ -442,15 +486,15 @@ impl Client {
+     /// with the `prepare` method.
+     ///
+     /// If the statement does not modify any rows (e.g. `SELECT`), 0 is returned.
+-    pub async fn execute<T>(
++    pub fn execute<T>(
+         &self,
+         statement: &T,
+         params: &[&(dyn ToSql + Sync)],
+-    ) -> Result<u64, Error>
++    ) -> impl Future<Output = Result<u64, Error>>
+     where
+         T: ?Sized + ToStatement,
+     {
+-        self.execute_raw(statement, slice_iter(params)).await
++        self.execute_raw(statement, slice_iter(params))
+     }
+ 
+     /// The maximally flexible version of [`execute`].
+@@ -511,8 +555,14 @@ impl Client {
+     /// Prepared statements should be use for any query which contains user-specified data, as they provided the
+     /// functionality to safely embed that data in the request. Do not form statements via string concatenation and pass
+     /// them to this method!
+-    pub async fn simple_query(&self, query: &str) -> Result<Vec<SimpleQueryMessage>, Error> {
+-        self.simple_query_raw(query).await?.try_collect().await
++    pub fn simple_query(
++        &self,
++        query: &str,
++    ) -> impl Future<Output = Result<Vec<SimpleQueryMessage>, Error>> {
++        match self.simple_query_raw(query) {
++            Ok(stream) => stream.try_collect().left_future(),
++            Err(e) => core::future::ready(Err(e)).right_future(),
++        }
+     }
+ 
+     /// Executes a sequence of SQL statements using the simple query protocol, returning the resulting rows as a stream.
+@@ -528,8 +578,8 @@ impl Client {
+     /// Prepared statements should be use for any query which contains user-specified data, as they provided the
+     /// functionality to safely embed that data in the request. Do not form statements via string concatenation and pass
+     /// them to this method!
+-    pub async fn simple_query_raw(&self, query: &str) -> Result<SimpleQueryStream, Error> {
+-        simple_query::simple_query(self.inner(), query).await
++    pub fn simple_query_raw(&self, query: &str) -> Result<SimpleQueryStream, Error> {
++        simple_query::simple_query(self.inner(), query)
+     }
+ 
+     /// Executes a sequence of SQL statements using the simple query protocol.
+@@ -542,21 +592,21 @@ impl Client {
+     /// Prepared statements should be use for any query which contains user-specified data, as they provided the
+     /// functionality to safely embed that data in the request. Do not form statements via string concatenation and pass
+     /// them to this method!
+-    pub async fn batch_execute(&self, query: &str) -> Result<(), Error> {
+-        simple_query::batch_execute(self.inner(), query).await
++    pub fn batch_execute(&self, query: &str) -> impl Future<Output = Result<(), Error>> {
++        simple_query::batch_execute(self.inner(), query)
+     }
+ 
+     /// Check that the connection is alive and wait for the confirmation.
+-    pub async fn check_connection(&self) -> Result<(), Error> {
++    pub fn check_connection(&self) -> impl Future<Output = Result<(), Error>> {
+         // sync is a very quick message to test the connection health.
+-        query::sync(self.inner()).await
++        query::sync(self.inner())
+     }
+ 
+     /// Begins a new database transaction.
+     ///
+     /// The transaction will roll back by default - use the `commit` method to commit it.
+-    pub async fn transaction(&mut self) -> Result<Transaction<'_>, Error> {
+-        self.build_transaction().start().await
++    pub fn transaction(&mut self) -> impl Future<Output = Result<Transaction<'_>, Error>> {
++        self.build_transaction().start()
+     }
+ 
+     /// Returns a builder for a transaction with custom settings.
+diff --git a/tokio-postgres/src/config.rs b/tokio-postgres/src/config.rs
+index f70ee912..581162da 100644
+--- a/tokio-postgres/src/config.rs
++++ b/tokio-postgres/src/config.rs
+@@ -16,6 +16,7 @@ use crate::{Client, Connection, Error};
+ use std::borrow::Cow;
+ #[cfg(unix)]
+ use std::ffi::OsStr;
++use std::future::Future;
+ use std::net::IpAddr;
+ use std::ops::Deref;
+ #[cfg(unix)]
+@@ -726,26 +727,29 @@ impl Config {
+     ///
+     /// Requires the `runtime` Cargo feature (enabled by default).
+     #[cfg(feature = "runtime")]
+-    pub async fn connect<T>(&self, tls: T) -> Result<(Client, Connection<Socket, T::Stream>), Error>
++    pub fn connect<T>(
++        &self,
++        tls: T,
++    ) -> impl Future<Output = Result<(Client, Connection<Socket, T::Stream>), Error>>
+     where
+         T: MakeTlsConnect<Socket>,
+     {
+-        connect(tls, self).await
++        connect(tls, self)
+     }
+ 
+     /// Connects to a PostgreSQL database over an arbitrary stream.
+     ///
+     /// All of the settings other than `user`, `password`, `dbname`, `options`, and `application_name` name are ignored.
+-    pub async fn connect_raw<S, T>(
++    pub fn connect_raw<S, T>(
+         &self,
+         stream: S,
+         tls: T,
+-    ) -> Result<(Client, Connection<S, T::Stream>), Error>
++    ) -> impl Future<Output = Result<(Client, Connection<S, T::Stream>), Error>>
+     where
+         S: AsyncRead + AsyncWrite + Unpin,
+         T: TlsConnect<S>,
+     {
+-        connect_raw(stream, tls, true, self).await
++        connect_raw(stream, tls, true, self)
+     }
+ }
+ 
+diff --git a/tokio-postgres/src/connect.rs b/tokio-postgres/src/connect.rs
+index 67c6e4ba..496dd475 100644
+--- a/tokio-postgres/src/connect.rs
++++ b/tokio-postgres/src/connect.rs
+@@ -120,7 +120,7 @@ where
+             }
+ 
+             Err(last_err.unwrap_or_else(|| {
+-                Error::connect(io::Error::new(
++                Error::connect(io::const_error!(
+                     io::ErrorKind::InvalidInput,
+                     "could not resolve any addresses",
+                 ))
+@@ -163,18 +163,7 @@ where
+     let (mut client, mut connection) = connect_raw(socket, tls, has_hostname, config).await?;
+ 
+     if config.target_session_attrs != TargetSessionAttrs::Any {
+-        let mut rows = pin!(client.simple_query_raw("SHOW transaction_read_only"));
+-
+-        let mut rows = pin!(
+-            future::poll_fn(|cx| {
+-                if connection.poll_unpin(cx)?.is_ready() {
+-                    return Poll::Ready(Err(Error::closed()));
+-                }
+-
+-                rows.as_mut().poll(cx)
+-            })
+-            .await?
+-        );
++        let mut rows = pin!(client.simple_query_raw("SHOW transaction_read_only")?);
+ 
+         loop {
+             let next = future::poll_fn(|cx| {
+@@ -191,14 +180,14 @@ where
+                     if read_only_result == Some("on")
+                         && config.target_session_attrs == TargetSessionAttrs::ReadWrite
+                     {
+-                        return Err(Error::connect(io::Error::new(
++                        return Err(Error::connect(io::const_error!(
+                             io::ErrorKind::PermissionDenied,
+                             "database does not allow writes",
+                         )));
+                     } else if read_only_result == Some("off")
+                         && config.target_session_attrs == TargetSessionAttrs::ReadOnly
+                     {
+-                        return Err(Error::connect(io::Error::new(
++                        return Err(Error::connect(io::const_error!(
+                             io::ErrorKind::PermissionDenied,
+                             "database is not read only",
+                         )));
+diff --git a/tokio-postgres/src/connect_socket.rs b/tokio-postgres/src/connect_socket.rs
+index 0001cef1..0bac1569 100644
+--- a/tokio-postgres/src/connect_socket.rs
++++ b/tokio-postgres/src/connect_socket.rs
+@@ -60,7 +60,7 @@ where
+         Some(timeout) => match time::timeout(timeout, connect).await {
+             Ok(Ok(socket)) => Ok(socket),
+             Ok(Err(e)) => Err(Error::connect(e)),
+-            Err(_) => Err(Error::connect(io::Error::new(
++            Err(_) => Err(Error::connect(io::const_error!(
+                 io::ErrorKind::TimedOut,
+                 "connection timed out",
+             ))),
+diff --git a/tokio-postgres/src/copy_in.rs b/tokio-postgres/src/copy_in.rs
+index b3d1a213..ee5b9741 100644
+--- a/tokio-postgres/src/copy_in.rs
++++ b/tokio-postgres/src/copy_in.rs
+@@ -125,8 +125,10 @@ where
+     ///
+     /// The `Sink::close` method is equivalent to `finish`, except that it does not return the
+     /// number of rows.
+-    pub async fn finish(mut self: Pin<&mut Self>) -> Result<u64, Error> {
+-        future::poll_fn(|cx| self.as_mut().poll_finish(cx)).await
++    pub fn finish(
++        mut self: Pin<&mut Self>,
++    ) -> impl std::future::Future<Output = Result<u64, Error>> {
++        future::poll_fn(move |cx| self.as_mut().poll_finish(cx))
+     }
+ }
+ 
+diff --git a/tokio-postgres/src/error/mod.rs b/tokio-postgres/src/error/mod.rs
+index 2a975eb2..7be5bebf 100644
+--- a/tokio-postgres/src/error/mod.rs
++++ b/tokio-postgres/src/error/mod.rs
+@@ -116,7 +116,7 @@ impl DbError {
+                 b'H' => hint = Some(value.into_owned()),
+                 b'P' => {
+                     normal_position = Some(value.parse::<u32>().map_err(|_| {
+-                        io::Error::new(
++                        io::const_error!(
+                             io::ErrorKind::InvalidInput,
+                             "`P` field did not contain an integer",
+                         )
+@@ -124,7 +124,7 @@ impl DbError {
+                 }
+                 b'p' => {
+                     internal_position = Some(value.parse::<u32>().map_err(|_| {
+-                        io::Error::new(
++                        io::const_error!(
+                             io::ErrorKind::InvalidInput,
+                             "`p` field did not contain an integer",
+                         )
+@@ -140,7 +140,7 @@ impl DbError {
+                 b'F' => file = Some(value.into_owned()),
+                 b'L' => {
+                     line = Some(value.parse::<u32>().map_err(|_| {
+-                        io::Error::new(
++                        io::const_error!(
+                             io::ErrorKind::InvalidInput,
+                             "`L` field did not contain an integer",
+                         )
+@@ -149,7 +149,7 @@ impl DbError {
+                 b'R' => routine = Some(value.into_owned()),
+                 b'V' => {
+                     parsed_severity = Some(Severity::from_str(&value).ok_or_else(|| {
+-                        io::Error::new(
++                        io::const_error!(
+                             io::ErrorKind::InvalidInput,
+                             "`V` field contained an invalid value",
+                         )
+@@ -161,12 +161,12 @@ impl DbError {
+ 
+         Ok(DbError {
+             severity: severity
+-                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "`S` field missing"))?,
++                .ok_or_else(|| io::const_error!(io::ErrorKind::InvalidInput, "`S` field missing"))?,
+             parsed_severity,
+             code: code
+-                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "`C` field missing"))?,
++                .ok_or_else(|| io::const_error!(io::ErrorKind::InvalidInput, "`C` field missing"))?,
+             message: message
+-                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "`M` field missing"))?,
++                .ok_or_else(|| io::const_error!(io::ErrorKind::InvalidInput, "`M` field missing"))?,
+             detail,
+             hint,
+             position: match normal_position {
+@@ -175,7 +175,7 @@ impl DbError {
+                     Some(position) => Some(ErrorPosition::Internal {
+                         position,
+                         query: internal_query.ok_or_else(|| {
+-                            io::Error::new(
++                            io::const_error!(
+                                 io::ErrorKind::InvalidInput,
+                                 "`q` field missing but `p` field present",
+                             )
+@@ -338,7 +338,7 @@ pub enum ErrorPosition {
+ }
+ 
+ #[derive(Debug, PartialEq)]
+-enum Kind {
++pub enum Kind {
+     Io,
+     UnexpectedMessage,
+     Tls,
+@@ -434,7 +434,7 @@ impl Error {
+         self.as_db_error().map(DbError::code)
+     }
+ 
+-    fn new(kind: Kind, cause: Option<Box<dyn error::Error + Sync + Send>>) -> Error {
++    pub fn new(kind: Kind, cause: Option<Box<dyn error::Error + Sync + Send>>) -> Error {
+         Error(Box::new(ErrorInner { kind, cause }))
+     }
+ 
+diff --git a/tokio-postgres/src/generic_client.rs b/tokio-postgres/src/generic_client.rs
+index dcda147b..7934442d 100644
+--- a/tokio-postgres/src/generic_client.rs
++++ b/tokio-postgres/src/generic_client.rs
+@@ -1,7 +1,7 @@
+ use crate::query::RowStream;
+ use crate::types::{BorrowToSql, ToSql, Type};
+ use crate::{Client, Error, Row, SimpleQueryMessage, Statement, ToStatement, Transaction};
+-use async_trait::async_trait;
++use std::future::Future;
+ 
+ mod private {
+     pub trait Sealed {}
+@@ -10,15 +10,22 @@ mod private {
+ /// A trait allowing abstraction over connections and transactions.
+ ///
+ /// This trait is "sealed", and cannot be implemented outside of this crate.
+-#[async_trait]
+ pub trait GenericClient: private::Sealed {
+     /// Like [`Client::execute`].
+-    async fn execute<T>(&self, query: &T, params: &[&(dyn ToSql + Sync)]) -> Result<u64, Error>
++    fn execute<T>(
++        &self,
++        query: &T,
++        params: &[&(dyn ToSql + Sync)],
++    ) -> impl Future<Output = Result<u64, Error>> + Send
+     where
+         T: ?Sized + ToStatement + Sync + Send;
+ 
+     /// Like [`Client::execute_raw`].
+-    async fn execute_raw<P, I, T>(&self, statement: &T, params: I) -> Result<u64, Error>
++    fn execute_raw<P, I, T>(
++        &self,
++        statement: &T,
++        params: I,
++    ) -> impl Future<Output = Result<u64, Error>> + Send
+     where
+         T: ?Sized + ToStatement + Sync + Send,
+         P: BorrowToSql,
+@@ -26,30 +33,38 @@ pub trait GenericClient: private::Sealed {
+         I::IntoIter: ExactSizeIterator;
+ 
+     /// Like [`Client::query`].
+-    async fn query<T>(&self, query: &T, params: &[&(dyn ToSql + Sync)]) -> Result<Vec<Row>, Error>
++    fn query<T>(
++        &self,
++        query: &T,
++        params: &[&(dyn ToSql + Sync)],
++    ) -> impl Future<Output = Result<Vec<Row>, Error>> + Send
+     where
+         T: ?Sized + ToStatement + Sync + Send;
+ 
+     /// Like [`Client::query_one`].
+-    async fn query_one<T>(
++    fn query_one<T>(
+         &self,
+         statement: &T,
+         params: &[&(dyn ToSql + Sync)],
+-    ) -> Result<Row, Error>
++    ) -> impl Future<Output = Result<Row, Error>> + Send
+     where
+         T: ?Sized + ToStatement + Sync + Send;
+ 
+     /// Like [`Client::query_opt`].
+-    async fn query_opt<T>(
++    fn query_opt<T>(
+         &self,
+         statement: &T,
+         params: &[&(dyn ToSql + Sync)],
+-    ) -> Result<Option<Row>, Error>
++    ) -> impl Future<Output = Result<Option<Row>, Error>> + Send
+     where
+         T: ?Sized + ToStatement + Sync + Send;
+ 
+     /// Like [`Client::query_raw`].
+-    async fn query_raw<T, P, I>(&self, statement: &T, params: I) -> Result<RowStream, Error>
++    fn query_raw<T, P, I>(
++        &self,
++        statement: &T,
++        params: I,
++    ) -> impl Future<Output = Result<RowStream, Error>> + Send
+     where
+         T: ?Sized + ToStatement + Sync + Send,
+         P: BorrowToSql,
+@@ -57,36 +72,43 @@ pub trait GenericClient: private::Sealed {
+         I::IntoIter: ExactSizeIterator;
+ 
+     /// Like [`Client::query_typed`]
+-    async fn query_typed(
++    fn query_typed(
+         &self,
+         statement: &str,
+         params: &[(&(dyn ToSql + Sync), Type)],
+-    ) -> Result<Vec<Row>, Error>;
++    ) -> impl Future<Output = Result<Vec<Row>, Error>> + Send;
+ 
+     /// Like [`Client::query_typed_raw`]
+-    async fn query_typed_raw<P, I>(&self, statement: &str, params: I) -> Result<RowStream, Error>
++    fn query_typed_raw<P, I>(
++        &self,
++        statement: &str,
++        params: I,
++    ) -> impl Future<Output = Result<RowStream, Error>> + Send
+     where
+         P: BorrowToSql,
+         I: IntoIterator<Item = (P, Type)> + Sync + Send;
+ 
+     /// Like [`Client::prepare`].
+-    async fn prepare(&self, query: &str) -> Result<Statement, Error>;
++    fn prepare(&self, query: &str) -> impl Future<Output = Result<Statement, Error>> + Send;
+ 
+     /// Like [`Client::prepare_typed`].
+-    async fn prepare_typed(
++    fn prepare_typed(
+         &self,
+         query: &str,
+         parameter_types: &[Type],
+-    ) -> Result<Statement, Error>;
++    ) -> impl Future<Output = Result<Statement, Error>> + Send;
+ 
+     /// Like [`Client::transaction`].
+-    async fn transaction<'a>(&'a mut self) -> Result<Transaction<'a>, Error>;
++    fn transaction<'a>(&'a mut self) -> impl Future<Output = Result<Transaction<'a>, Error>> + Send;
+ 
+     /// Like [`Client::batch_execute`].
+-    async fn batch_execute(&self, query: &str) -> Result<(), Error>;
++    fn batch_execute(&self, query: &str) -> impl Future<Output = Result<(), Error>> + Send;
+ 
+     /// Like [`Client::simple_query`].
+-    async fn simple_query(&self, query: &str) -> Result<Vec<SimpleQueryMessage>, Error>;
++    fn simple_query(
++        &self,
++        query: &str,
++    ) -> impl Future<Output = Result<Vec<SimpleQueryMessage>, Error>> + Send;
+ 
+     /// Returns a reference to the underlying [`Client`].
+     fn client(&self) -> &Client;
+@@ -94,102 +116,124 @@ pub trait GenericClient: private::Sealed {
+ 
+ impl private::Sealed for Client {}
+ 
+-#[async_trait]
+ impl GenericClient for Client {
+-    async fn execute<T>(&self, query: &T, params: &[&(dyn ToSql + Sync)]) -> Result<u64, Error>
++    fn execute<T>(
++        &self,
++        query: &T,
++        params: &[&(dyn ToSql + Sync)],
++    ) -> impl Future<Output = Result<u64, Error>>
+     where
+         T: ?Sized + ToStatement + Sync + Send,
+     {
+-        self.execute(query, params).await
++        self.execute(query, params)
+     }
+ 
+-    async fn execute_raw<P, I, T>(&self, statement: &T, params: I) -> Result<u64, Error>
++    fn execute_raw<P, I, T>(
++        &self,
++        statement: &T,
++        params: I,
++    ) -> impl Future<Output = Result<u64, Error>>
+     where
+         T: ?Sized + ToStatement + Sync + Send,
+         P: BorrowToSql,
+         I: IntoIterator<Item = P> + Sync + Send,
+         I::IntoIter: ExactSizeIterator,
+     {
+-        self.execute_raw(statement, params).await
++        self.execute_raw(statement, params)
+     }
+ 
+-    async fn query<T>(&self, query: &T, params: &[&(dyn ToSql + Sync)]) -> Result<Vec<Row>, Error>
++    fn query<T>(
++        &self,
++        query: &T,
++        params: &[&(dyn ToSql + Sync)],
++    ) -> impl Future<Output = Result<Vec<Row>, Error>>
+     where
+         T: ?Sized + ToStatement + Sync + Send,
+     {
+-        self.query(query, params).await
++        self.query(query, params)
+     }
+ 
+-    async fn query_one<T>(
++    fn query_one<T>(
+         &self,
+         statement: &T,
+         params: &[&(dyn ToSql + Sync)],
+-    ) -> Result<Row, Error>
++    ) -> impl Future<Output = Result<Row, Error>>
+     where
+         T: ?Sized + ToStatement + Sync + Send,
+     {
+-        self.query_one(statement, params).await
++        self.query_one(statement, params)
+     }
+ 
+-    async fn query_opt<T>(
++    fn query_opt<T>(
+         &self,
+         statement: &T,
+         params: &[&(dyn ToSql + Sync)],
+-    ) -> Result<Option<Row>, Error>
++    ) -> impl Future<Output = Result<Option<Row>, Error>>
+     where
+         T: ?Sized + ToStatement + Sync + Send,
+     {
+-        self.query_opt(statement, params).await
++        self.query_opt(statement, params)
+     }
+ 
+-    async fn query_raw<T, P, I>(&self, statement: &T, params: I) -> Result<RowStream, Error>
++    fn query_raw<T, P, I>(
++        &self,
++        statement: &T,
++        params: I,
++    ) -> impl Future<Output = Result<RowStream, Error>>
+     where
+         T: ?Sized + ToStatement + Sync + Send,
+         P: BorrowToSql,
+         I: IntoIterator<Item = P> + Sync + Send,
+         I::IntoIter: ExactSizeIterator,
+     {
+-        self.query_raw(statement, params).await
++        self.query_raw(statement, params)
+     }
+ 
+-    async fn query_typed(
++    fn query_typed(
+         &self,
+         statement: &str,
+         params: &[(&(dyn ToSql + Sync), Type)],
+-    ) -> Result<Vec<Row>, Error> {
+-        self.query_typed(statement, params).await
++    ) -> impl Future<Output = Result<Vec<Row>, Error>> {
++        self.query_typed(statement, params)
+     }
+ 
+-    async fn query_typed_raw<P, I>(&self, statement: &str, params: I) -> Result<RowStream, Error>
++    fn query_typed_raw<P, I>(
++        &self,
++        statement: &str,
++        params: I,
++    ) -> impl Future<Output = Result<RowStream, Error>>
+     where
+         P: BorrowToSql,
+         I: IntoIterator<Item = (P, Type)> + Sync + Send,
+     {
+-        self.query_typed_raw(statement, params).await
++        self.query_typed_raw(statement, params)
+     }
+ 
+-    async fn prepare(&self, query: &str) -> Result<Statement, Error> {
+-        self.prepare(query).await
++    fn prepare(&self, query: &str) -> impl Future<Output = Result<Statement, Error>> {
++        self.prepare(query)
+     }
+ 
+-    async fn prepare_typed(
++    fn prepare_typed(
+         &self,
+         query: &str,
+         parameter_types: &[Type],
+-    ) -> Result<Statement, Error> {
+-        self.prepare_typed(query, parameter_types).await
++    ) -> impl Future<Output = Result<Statement, Error>> {
++        self.prepare_typed(query, parameter_types)
+     }
+ 
+-    async fn transaction<'a>(&'a mut self) -> Result<Transaction<'a>, Error> {
+-        self.transaction().await
++    fn transaction(&mut self) -> impl Future<Output = Result<Transaction<'_>, Error>> {
++        self.transaction()
+     }
+ 
+-    async fn batch_execute(&self, query: &str) -> Result<(), Error> {
+-        self.batch_execute(query).await
++    fn batch_execute(&self, query: &str) -> impl Future<Output = Result<(), Error>> {
++        self.batch_execute(query)
+     }
+ 
+-    async fn simple_query(&self, query: &str) -> Result<Vec<SimpleQueryMessage>, Error> {
+-        self.simple_query(query).await
++    fn simple_query(
++        &self,
++        query: &str,
++    ) -> impl Future<Output = Result<Vec<SimpleQueryMessage>, Error>> {
++        self.simple_query(query)
+     }
+ 
+     fn client(&self) -> &Client {
+@@ -199,104 +243,125 @@ impl GenericClient for Client {
+ 
+ impl private::Sealed for Transaction<'_> {}
+ 
+-#[async_trait]
+ #[allow(clippy::needless_lifetimes)]
+ impl GenericClient for Transaction<'_> {
+-    async fn execute<T>(&self, query: &T, params: &[&(dyn ToSql + Sync)]) -> Result<u64, Error>
++    fn execute<T>(
++        &self,
++        query: &T,
++        params: &[&(dyn ToSql + Sync)],
++    ) -> impl Future<Output = Result<u64, Error>>
+     where
+         T: ?Sized + ToStatement + Sync + Send,
+     {
+-        self.execute(query, params).await
++        self.execute(query, params)
+     }
+ 
+-    async fn execute_raw<P, I, T>(&self, statement: &T, params: I) -> Result<u64, Error>
++    fn execute_raw<P, I, T>(
++        &self,
++        statement: &T,
++        params: I,
++    ) -> impl Future<Output = Result<u64, Error>>
+     where
+         T: ?Sized + ToStatement + Sync + Send,
+         P: BorrowToSql,
+         I: IntoIterator<Item = P> + Sync + Send,
+         I::IntoIter: ExactSizeIterator,
+     {
+-        self.execute_raw(statement, params).await
++        self.execute_raw(statement, params)
+     }
+ 
+-    async fn query<T>(&self, query: &T, params: &[&(dyn ToSql + Sync)]) -> Result<Vec<Row>, Error>
++    fn query<T>(
++        &self,
++        query: &T,
++        params: &[&(dyn ToSql + Sync)],
++    ) -> impl Future<Output = Result<Vec<Row>, Error>>
+     where
+         T: ?Sized + ToStatement + Sync + Send,
+     {
+-        self.query(query, params).await
++        self.query(query, params)
+     }
+ 
+-    async fn query_one<T>(
++    fn query_one<T>(
+         &self,
+         statement: &T,
+         params: &[&(dyn ToSql + Sync)],
+-    ) -> Result<Row, Error>
++    ) -> impl Future<Output = Result<Row, Error>>
+     where
+         T: ?Sized + ToStatement + Sync + Send,
+     {
+-        self.query_one(statement, params).await
++        self.query_one(statement, params)
+     }
+ 
+-    async fn query_opt<T>(
++    fn query_opt<T>(
+         &self,
+         statement: &T,
+         params: &[&(dyn ToSql + Sync)],
+-    ) -> Result<Option<Row>, Error>
++    ) -> impl Future<Output = Result<Option<Row>, Error>>
+     where
+         T: ?Sized + ToStatement + Sync + Send,
+     {
+-        self.query_opt(statement, params).await
++        self.query_opt(statement, params)
+     }
+ 
+-    async fn query_raw<T, P, I>(&self, statement: &T, params: I) -> Result<RowStream, Error>
++    fn query_raw<T, P, I>(
++        &self,
++        statement: &T,
++        params: I,
++    ) -> impl Future<Output = Result<RowStream, Error>>
+     where
+         T: ?Sized + ToStatement + Sync + Send,
+         P: BorrowToSql,
+         I: IntoIterator<Item = P> + Sync + Send,
+         I::IntoIter: ExactSizeIterator,
+     {
+-        self.query_raw(statement, params).await
++        self.query_raw(statement, params)
+     }
+ 
+-    async fn query_typed(
++    fn query_typed(
+         &self,
+         statement: &str,
+         params: &[(&(dyn ToSql + Sync), Type)],
+-    ) -> Result<Vec<Row>, Error> {
+-        self.query_typed(statement, params).await
++    ) -> impl Future<Output = Result<Vec<Row>, Error>> {
++        self.query_typed(statement, params)
+     }
+ 
+-    async fn query_typed_raw<P, I>(&self, statement: &str, params: I) -> Result<RowStream, Error>
++    fn query_typed_raw<P, I>(
++        &self,
++        statement: &str,
++        params: I,
++    ) -> impl Future<Output = Result<RowStream, Error>>
+     where
+         P: BorrowToSql,
+         I: IntoIterator<Item = (P, Type)> + Sync + Send,
+     {
+-        self.query_typed_raw(statement, params).await
++        self.query_typed_raw(statement, params)
+     }
+ 
+-    async fn prepare(&self, query: &str) -> Result<Statement, Error> {
+-        self.prepare(query).await
++    fn prepare(&self, query: &str) -> impl Future<Output = Result<Statement, Error>> {
++        self.prepare(query)
+     }
+ 
+-    async fn prepare_typed(
++    fn prepare_typed(
+         &self,
+         query: &str,
+         parameter_types: &[Type],
+-    ) -> Result<Statement, Error> {
+-        self.prepare_typed(query, parameter_types).await
++    ) -> impl Future<Output = Result<Statement, Error>> {
++        self.prepare_typed(query, parameter_types)
+     }
+ 
+-    #[allow(clippy::needless_lifetimes)]
+-    async fn transaction<'a>(&'a mut self) -> Result<Transaction<'a>, Error> {
+-        self.transaction().await
++    fn transaction<'a>(&'a mut self) -> impl Future<Output = Result<Transaction<'a>, Error>> {
++        self.transaction()
+     }
+ 
+-    async fn batch_execute(&self, query: &str) -> Result<(), Error> {
+-        self.batch_execute(query).await
++    fn batch_execute(&self, query: &str) -> impl Future<Output = Result<(), Error>> {
++        self.batch_execute(query)
+     }
+ 
+-    async fn simple_query(&self, query: &str) -> Result<Vec<SimpleQueryMessage>, Error> {
+-        self.simple_query(query).await
++    fn simple_query(
++        &self,
++        query: &str,
++    ) -> impl Future<Output = Result<Vec<SimpleQueryMessage>, Error>> {
++        self.simple_query(query)
+     }
+ 
+     fn client(&self) -> &Client {
+diff --git a/tokio-postgres/src/lib.rs b/tokio-postgres/src/lib.rs
+index 82bdfdfa..c27370f9 100644
+--- a/tokio-postgres/src/lib.rs
++++ b/tokio-postgres/src/lib.rs
+@@ -122,6 +122,7 @@
+ //! | `with-time-0_2` | Enable support for the 0.2 version of the `time` crate. | [time](https://crates.io/crates/time/0.2.0) 0.2 | no |
+ //! | `with-time-0_3` | Enable support for the 0.3 version of the `time` crate. | [time](https://crates.io/crates/time/0.3.0) 0.3 | no |
+ #![warn(rust_2018_idioms, clippy::all, missing_docs)]
++#![feature(io_const_error)]
+ 
+ pub use crate::cancel_token::CancelToken;
+ pub use crate::client::Client;
+diff --git a/tokio-postgres/src/prepare.rs b/tokio-postgres/src/prepare.rs
+index e1ea2b04..95829dfd 100644
+--- a/tokio-postgres/src/prepare.rs
++++ b/tokio-postgres/src/prepare.rs
+@@ -132,7 +132,7 @@ fn encode(client: &InnerClient, name: &str, query: &str, types: &[Type]) -> Resu
+     })
+ }
+ 
+-pub(crate) async fn get_type(client: &Arc<InnerClient>, oid: Oid) -> Result<Type, Error> {
++pub async fn get_type(client: &Arc<InnerClient>, oid: Oid) -> Result<Type, Error> {
+     if let Some(type_) = Type::from_oid(oid) {
+         return Ok(type_);
+     }
+diff --git a/tokio-postgres/src/query.rs b/tokio-postgres/src/query.rs
+index 124c8ccf..2a535861 100644
+--- a/tokio-postgres/src/query.rs
++++ b/tokio-postgres/src/query.rs
+@@ -120,7 +120,7 @@ where
+     }
+ }
+ 
+-pub async fn query_portal(
++pub fn query_portal(
+     client: &InnerClient,
+     portal: &Portal,
+     max_rows: i32,
+diff --git a/tokio-postgres/src/row.rs b/tokio-postgres/src/row.rs
+index 3726a5e8..228d5302 100644
+--- a/tokio-postgres/src/row.rs
++++ b/tokio-postgres/src/row.rs
+@@ -194,6 +194,10 @@ impl Row {
+         let range = self.ranges[idx].to_owned()?;
+         Some(&self.body.buffer()[range])
+     }
++
++    pub fn buffer_bytes(&self) -> &bytes::Bytes {
++        self.body.buffer_bytes()
++    }
+ }
+ 
+ impl AsName for SimpleColumn {
+@@ -277,4 +281,8 @@ impl SimpleQueryRow {
+         let buf = self.ranges[idx].clone().map(|r| &self.body.buffer()[r]);
+         FromSql::from_sql_nullable(&Type::TEXT, buf).map_err(|e| Error::from_sql(e, idx))
+     }
++
++    pub fn buffer_bytes(&self) -> &bytes::Bytes {
++        self.body.buffer_bytes()
++    }
+ }
+diff --git a/tokio-postgres/src/simple_query.rs b/tokio-postgres/src/simple_query.rs
+index 1696ab23..2aa2796d 100644
+--- a/tokio-postgres/src/simple_query.rs
++++ b/tokio-postgres/src/simple_query.rs
+@@ -31,7 +31,7 @@ impl SimpleColumn {
+     }
+ }
+ 
+-pub async fn simple_query(client: &InnerClient, query: &str) -> Result<SimpleQueryStream, Error> {
++pub fn simple_query(client: &InnerClient, query: &str) -> Result<SimpleQueryStream, Error> {
+     debug!("executing simple query: {query}");
+ 
+     let buf = encode(client, query)?;
+diff --git a/tokio-postgres/src/to_statement.rs b/tokio-postgres/src/to_statement.rs
+index 7e129927..c6234737 100644
+--- a/tokio-postgres/src/to_statement.rs
++++ b/tokio-postgres/src/to_statement.rs
+@@ -12,10 +12,12 @@ mod private {
+     }
+ 
+     impl ToStatementType<'_> {
+-        pub async fn into_statement(self, client: &Client) -> Result<Statement, Error> {
++        pub fn into_statement(self, client: &Client) -> impl Future<Output = Result<Statement, Error>> {
++            use futures_util::FutureExt;
++
+             match self {
+-                ToStatementType::Statement(s) => Ok(s.clone()),
+-                ToStatementType::Query(s) => client.prepare(s).await,
++                ToStatementType::Statement(s) => core::future::ready(Ok(s.clone())).left_future(),
++                ToStatementType::Query(s) => client.prepare(s).right_future(),
+             }
+         }
+     }
+diff --git a/tokio-postgres/src/transaction.rs b/tokio-postgres/src/transaction.rs
+index 0186da06..d751a07f 100644
+--- a/tokio-postgres/src/transaction.rs
++++ b/tokio-postgres/src/transaction.rs
+@@ -11,7 +11,7 @@ use crate::{
+     SimpleQueryMessage, Statement, ToStatement,
+ };
+ use bytes::Buf;
+-use futures_util::TryStreamExt;
++use futures_util::{Future, FutureExt, TryStreamExt};
+ use tokio::io::{AsyncRead, AsyncWrite};
+ 
+ /// A representation of a PostgreSQL database transaction.
+@@ -75,105 +75,117 @@ impl<'a> Transaction<'a> {
+     }
+ 
+     /// Like `Client::prepare`.
+-    pub async fn prepare(&self, query: &str) -> Result<Statement, Error> {
+-        self.client.prepare(query).await
++    pub fn prepare(&self, query: &str) -> impl Future<Output = Result<Statement, Error>> {
++        self.client.prepare(query)
+     }
+ 
+     /// Like `Client::prepare_typed`.
+-    pub async fn prepare_typed(
++    pub fn prepare_typed(
+         &self,
+         query: &str,
+         parameter_types: &[Type],
+-    ) -> Result<Statement, Error> {
+-        self.client.prepare_typed(query, parameter_types).await
++    ) -> impl Future<Output = Result<Statement, Error>> {
++        self.client.prepare_typed(query, parameter_types)
+     }
+ 
+     /// Like `Client::query`.
+-    pub async fn query<T>(
++    pub fn query<T>(
+         &self,
+         statement: &T,
+         params: &[&(dyn ToSql + Sync)],
+-    ) -> Result<Vec<Row>, Error>
++    ) -> impl Future<Output = Result<Vec<Row>, Error>>
+     where
+         T: ?Sized + ToStatement,
+     {
+-        self.client.query(statement, params).await
++        self.client.query(statement, params)
+     }
+ 
+     /// Like `Client::query_one`.
+-    pub async fn query_one<T>(
++    pub fn query_one<T>(
+         &self,
+         statement: &T,
+         params: &[&(dyn ToSql + Sync)],
+-    ) -> Result<Row, Error>
++    ) -> impl Future<Output = Result<Row, Error>>
+     where
+         T: ?Sized + ToStatement,
+     {
+-        self.client.query_one(statement, params).await
++        self.client.query_one(statement, params)
+     }
+ 
+     /// Like `Client::query_opt`.
+-    pub async fn query_opt<T>(
++    pub fn query_opt<T>(
+         &self,
+         statement: &T,
+         params: &[&(dyn ToSql + Sync)],
+-    ) -> Result<Option<Row>, Error>
++    ) -> impl Future<Output = Result<Option<Row>, Error>>
+     where
+         T: ?Sized + ToStatement,
+     {
+-        self.client.query_opt(statement, params).await
++        self.client.query_opt(statement, params)
+     }
+ 
+     /// Like `Client::query_raw`.
+-    pub async fn query_raw<T, P, I>(&self, statement: &T, params: I) -> Result<RowStream, Error>
++    pub fn query_raw<T, P, I>(
++        &self,
++        statement: &T,
++        params: I,
++    ) -> impl Future<Output = Result<RowStream, Error>>
+     where
+         T: ?Sized + ToStatement,
+         P: BorrowToSql,
+         I: IntoIterator<Item = P>,
+         I::IntoIter: ExactSizeIterator,
+     {
+-        self.client.query_raw(statement, params).await
++        self.client.query_raw(statement, params)
+     }
+ 
+     /// Like `Client::query_typed`.
+-    pub async fn query_typed(
++    pub fn query_typed(
+         &self,
+         statement: &str,
+         params: &[(&(dyn ToSql + Sync), Type)],
+-    ) -> Result<Vec<Row>, Error> {
+-        self.client.query_typed(statement, params).await
++    ) -> impl Future<Output = Result<Vec<Row>, Error>> {
++        self.client.query_typed(statement, params)
+     }
+ 
+     /// Like `Client::query_typed_raw`.
+-    pub async fn query_typed_raw<P, I>(&self, query: &str, params: I) -> Result<RowStream, Error>
++    pub fn query_typed_raw<P, I>(
++        &self,
++        query: &str,
++        params: I,
++    ) -> impl Future<Output = Result<RowStream, Error>>
+     where
+         P: BorrowToSql,
+         I: IntoIterator<Item = (P, Type)>,
+     {
+-        self.client.query_typed_raw(query, params).await
++        self.client.query_typed_raw(query, params)
+     }
+ 
+     /// Like `Client::execute`.
+-    pub async fn execute<T>(
++    pub fn execute<T>(
+         &self,
+         statement: &T,
+         params: &[&(dyn ToSql + Sync)],
+-    ) -> Result<u64, Error>
++    ) -> impl Future<Output = Result<u64, Error>>
+     where
+         T: ?Sized + ToStatement,
+     {
+-        self.client.execute(statement, params).await
++        self.client.execute(statement, params)
+     }
+ 
+     /// Like `Client::execute_iter`.
+-    pub async fn execute_raw<P, I, T>(&self, statement: &T, params: I) -> Result<u64, Error>
++    pub fn execute_raw<P, I, T>(
++        &self,
++        statement: &T,
++        params: I,
++    ) -> impl Future<Output = Result<u64, Error>>
+     where
+         T: ?Sized + ToStatement,
+         P: BorrowToSql,
+         I: IntoIterator<Item = P>,
+         I::IntoIter: ExactSizeIterator,
+     {
+-        self.client.execute_raw(statement, params).await
++        self.client.execute_raw(statement, params)
+     }
+ 
+     /// Binds a statement to a set of parameters, creating a `Portal` which can be incrementally queried.
+@@ -184,15 +196,15 @@ impl<'a> Transaction<'a> {
+     /// # Panics
+     ///
+     /// Panics if the number of parameters provided does not match the number expected.
+-    pub async fn bind<T>(
++    pub fn bind<T>(
+         &self,
+         statement: &T,
+         params: &[&(dyn ToSql + Sync)],
+-    ) -> Result<Portal, Error>
++    ) -> impl Future<Output = Result<Portal, Error>>
+     where
+         T: ?Sized + ToStatement,
+     {
+-        self.bind_raw(statement, slice_iter(params)).await
++        self.bind_raw(statement, slice_iter(params))
+     }
+ 
+     /// A maximally flexible version of [`bind`].
+@@ -213,49 +225,52 @@ impl<'a> Transaction<'a> {
+     ///
+     /// Unlike `query`, portals can be incrementally evaluated by limiting the number of rows returned in each call to
+     /// `query_portal`. If the requested number is negative or 0, all rows will be returned.
+-    pub async fn query_portal(&self, portal: &Portal, max_rows: i32) -> Result<Vec<Row>, Error> {
+-        self.query_portal_raw(portal, max_rows)
+-            .await?
+-            .try_collect()
+-            .await
++    pub fn query_portal(
++        &self,
++        portal: &Portal,
++        max_rows: i32,
++    ) -> impl Future<Output = Result<Vec<Row>, Error>> {
++        match self.query_portal_raw(portal, max_rows) {
++            Ok(stream) => stream.try_collect().left_future(),
++            Err(e) => core::future::ready(Err(e)).right_future(),
++        }
+     }
+ 
+     /// The maximally flexible version of [`query_portal`].
+     ///
+     /// [`query_portal`]: #method.query_portal
+-    pub async fn query_portal_raw(
+-        &self,
+-        portal: &Portal,
+-        max_rows: i32,
+-    ) -> Result<RowStream, Error> {
+-        query::query_portal(self.client.inner(), portal, max_rows).await
++    pub fn query_portal_raw(&self, portal: &Portal, max_rows: i32) -> Result<RowStream, Error> {
++        query::query_portal(self.client.inner(), portal, max_rows)
+     }
+ 
+     /// Like `Client::copy_in`.
+-    pub async fn copy_in<T, U>(&self, statement: &T) -> Result<CopyInSink<U>, Error>
++    pub fn copy_in<T, U>(&self, statement: &T) -> impl Future<Output = Result<CopyInSink<U>, Error>>
+     where
+         T: ?Sized + ToStatement,
+         U: Buf + 'static + Send,
+     {
+-        self.client.copy_in(statement).await
++        self.client.copy_in(statement)
+     }
+ 
+     /// Like `Client::copy_out`.
+-    pub async fn copy_out<T>(&self, statement: &T) -> Result<CopyOutStream, Error>
++    pub fn copy_out<T>(&self, statement: &T) -> impl Future<Output = Result<CopyOutStream, Error>>
+     where
+         T: ?Sized + ToStatement,
+     {
+-        self.client.copy_out(statement).await
++        self.client.copy_out(statement)
+     }
+ 
+     /// Like `Client::simple_query`.
+-    pub async fn simple_query(&self, query: &str) -> Result<Vec<SimpleQueryMessage>, Error> {
+-        self.client.simple_query(query).await
++    pub fn simple_query(
++        &self,
++        query: &str,
++    ) -> impl Future<Output = Result<Vec<SimpleQueryMessage>, Error>> {
++        self.client.simple_query(query)
+     }
+ 
+     /// Like `Client::batch_execute`.
+-    pub async fn batch_execute(&self, query: &str) -> Result<(), Error> {
+-        self.client.batch_execute(query).await
++    pub fn batch_execute(&self, query: &str) -> impl Future<Output = Result<(), Error>> {
++        self.client.batch_execute(query)
+     }
+ 
+     /// Like `Client::cancel_token`.
+@@ -266,36 +281,40 @@ impl<'a> Transaction<'a> {
+     /// Like `Client::cancel_query`.
+     #[cfg(feature = "runtime")]
+     #[deprecated(since = "0.6.0", note = "use Transaction::cancel_token() instead")]
+-    pub async fn cancel_query<T>(&self, tls: T) -> Result<(), Error>
++    pub fn cancel_query<T>(&self, tls: T) -> impl Future<Output = Result<(), Error>>
+     where
+         T: MakeTlsConnect<Socket>,
+     {
+         #[allow(deprecated)]
+-        self.client.cancel_query(tls).await
++        self.client.cancel_query(tls)
+     }
+ 
+     /// Like `Client::cancel_query_raw`.
+     #[deprecated(since = "0.6.0", note = "use Transaction::cancel_token() instead")]
+-    pub async fn cancel_query_raw<S, T>(&self, stream: S, tls: T) -> Result<(), Error>
++    pub fn cancel_query_raw<S, T>(
++        &self,
++        stream: S,
++        tls: T,
++    ) -> impl Future<Output = Result<(), Error>>
+     where
+         S: AsyncRead + AsyncWrite + Unpin,
+         T: TlsConnect<S>,
+     {
+         #[allow(deprecated)]
+-        self.client.cancel_query_raw(stream, tls).await
++        self.client.cancel_query_raw(stream, tls)
+     }
+ 
+     /// Like `Client::transaction`, but creates a nested transaction via a savepoint.
+-    pub async fn transaction(&mut self) -> Result<Transaction<'_>, Error> {
+-        self._savepoint(None).await
++    pub fn transaction(&mut self) -> impl Future<Output = Result<Transaction<'_>, Error>> {
++        self._savepoint(None)
+     }
+ 
+     /// Like `Client::transaction`, but creates a nested transaction via a savepoint with the specified name.
+-    pub async fn savepoint<I>(&mut self, name: I) -> Result<Transaction<'_>, Error>
++    pub fn savepoint<I>(&mut self, name: I) -> impl Future<Output = Result<Transaction<'_>, Error>>
+     where
+         I: Into<String>,
+     {
+-        self._savepoint(Some(name.into())).await
++        self._savepoint(Some(name.into()))
+     }
+ 
+     async fn _savepoint(&mut self, name: Option<String>) -> Result<Transaction<'_>, Error> {

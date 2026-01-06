@@ -1,0 +1,26 @@
+diff --git a/src/api.rs b/src/api.rs
+index 6a80e70..a44a3a6 100644
+--- a/src/api.rs
++++ b/src/api.rs
+@@ -22,8 +22,8 @@ impl<M: ManageConnection> Pool<M> {
+     }
+ 
+     /// Retrieves a connection from the pool.
+-    pub async fn get(&self) -> Result<PooledConnection<'_, M>, RunError<M::Error>> {
+-        self.inner.get().await
++    pub fn get(&self) -> impl Future<Output = Result<PooledConnection<'_, M>, RunError<M::Error>>> {
++        self.inner.get()
+     }
+ 
+     /// Retrieves an owned connection from the pool
+@@ -44,8 +44,8 @@ impl<M: ManageConnection> Pool<M> {
+     ///
+     /// This method allows reusing the manager's configuration but otherwise
+     /// bypassing the pool
+-    pub async fn dedicated_connection(&self) -> Result<M::Connection, M::Error> {
+-        self.inner.connect().await
++    pub fn dedicated_connection(&self) -> impl Future<Output = Result<M::Connection, M::Error>> + '_ {
++        self.inner.connect()
+     }
+ 
+     /// Adds a connection to the pool.

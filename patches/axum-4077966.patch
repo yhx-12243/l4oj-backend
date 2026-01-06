@@ -1,0 +1,1274 @@
+diff --git a/axum-core/Cargo.toml b/axum-core/Cargo.toml
+index f3f31e3c..64370e06 100644
+--- a/axum-core/Cargo.toml
++++ b/axum-core/Cargo.toml
+@@ -42,7 +42,6 @@ http-body = "1.0.0"
+ http-body-util = "0.1.0"
+ mime = "0.3.16"
+ pin-project-lite = "0.2.7"
+-sync_wrapper = "1.0.0"
+ tower-layer = "0.3"
+ tower-service = "0.3"
+ 
+diff --git a/axum-core/src/body.rs b/axum-core/src/body.rs
+index cbc5606b..039256ea 100644
+--- a/axum-core/src/body.rs
++++ b/axum-core/src/body.rs
+@@ -8,10 +8,10 @@ use http_body_util::BodyExt;
+ use pin_project_lite::pin_project;
+ use std::pin::Pin;
+ use std::task::{ready, Context, Poll};
+-use sync_wrapper::SyncWrapper;
+ 
+ type BoxBody = http_body_util::combinators::UnsyncBoxBody<Bytes, Error>;
+ 
++#[inline]
+ fn boxed<B>(body: B) -> BoxBody
+ where
+     B: http_body::Body<Data = Bytes> + Send + 'static,
+@@ -20,6 +20,7 @@ where
+     try_downcast(body).unwrap_or_else(|body| body.map_err(Error::new).boxed_unsync())
+ }
+ 
++#[inline]
+ pub(crate) fn try_downcast<T, K>(k: K) -> Result<T, K>
+ where
+     T: 'static,
+@@ -27,9 +28,9 @@ where
+ {
+     let mut k = Some(k);
+     if let Some(k) = <dyn std::any::Any>::downcast_mut::<Option<T>>(&mut k) {
+-        Ok(k.take().unwrap())
++        Ok(unsafe { k.take().unwrap_unchecked() })
+     } else {
+-        Err(k.unwrap())
++        Err(unsafe { k.unwrap_unchecked() })
+     }
+ }
+ 
+@@ -58,13 +59,10 @@ impl Body {
+     /// [`Stream`]: https://docs.rs/futures-core/latest/futures_core/stream/trait.Stream.html
+     pub fn from_stream<S>(stream: S) -> Self
+     where
+-        S: TryStream + Send + 'static,
+-        S::Ok: Into<Bytes>,
++        S: TryStream<Ok = Frame<Bytes>> + Send + 'static,
+         S::Error: Into<BoxError>,
+     {
+-        Self::new(StreamBody {
+-            stream: SyncWrapper::new(stream),
+-        })
++        Self::new(StreamBody::new(stream))
+     }
+ 
+     /// Convert the body into a [`Stream`] of data frames.
+@@ -74,7 +72,7 @@ impl Body {
+     ///
+     /// [`http_body_util::BodyStream`]: https://docs.rs/http-body-util/latest/http_body_util/struct.BodyStream.html
+     pub fn into_data_stream(self) -> BodyDataStream {
+-        BodyDataStream { inner: self }
++        BodyDataStream::new(self)
+     }
+ }
+ 
+@@ -133,91 +131,8 @@ impl http_body::Body for Body {
+     }
+ }
+ 
+-/// A stream of data frames.
+-///
+-/// Created with [`Body::into_data_stream`].
+-#[must_use]
+-#[derive(Debug)]
+-pub struct BodyDataStream {
+-    inner: Body,
+-}
+-
+-impl Stream for BodyDataStream {
+-    type Item = Result<Bytes, Error>;
+-
+-    #[inline]
+-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+-        loop {
+-            match ready!(Pin::new(&mut self.inner).poll_frame(cx)?) {
+-                Some(frame) => match frame.into_data() {
+-                    Ok(data) => return Poll::Ready(Some(Ok(data))),
+-                    Err(_frame) => {}
+-                },
+-                None => return Poll::Ready(None),
+-            }
+-        }
+-    }
+-
+-    #[inline]
+-    fn size_hint(&self) -> (usize, Option<usize>) {
+-        let size_hint = self.inner.size_hint();
+-        let lower = usize::try_from(size_hint.lower()).unwrap_or_default();
+-        let upper = size_hint.upper().and_then(|v| usize::try_from(v).ok());
+-        (lower, upper)
+-    }
+-}
+-
+-impl http_body::Body for BodyDataStream {
+-    type Data = Bytes;
+-    type Error = Error;
+-
+-    #[inline]
+-    fn poll_frame(
+-        mut self: Pin<&mut Self>,
+-        cx: &mut Context<'_>,
+-    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+-        Pin::new(&mut self.inner).poll_frame(cx)
+-    }
+-
+-    #[inline]
+-    fn is_end_stream(&self) -> bool {
+-        self.inner.is_end_stream()
+-    }
+-
+-    #[inline]
+-    fn size_hint(&self) -> http_body::SizeHint {
+-        self.inner.size_hint()
+-    }
+-}
+-
+-pin_project! {
+-    struct StreamBody<S> {
+-        #[pin]
+-        stream: SyncWrapper<S>,
+-    }
+-}
+-
+-impl<S> http_body::Body for StreamBody<S>
+-where
+-    S: TryStream,
+-    S::Ok: Into<Bytes>,
+-    S::Error: Into<BoxError>,
+-{
+-    type Data = Bytes;
+-    type Error = Error;
+-
+-    fn poll_frame(
+-        self: Pin<&mut Self>,
+-        cx: &mut Context<'_>,
+-    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+-        let stream = self.project().stream.get_pin_mut();
+-        match ready!(stream.try_poll_next(cx)) {
+-            Some(Ok(chunk)) => Poll::Ready(Some(Ok(Frame::data(chunk.into())))),
+-            Some(Err(err)) => Poll::Ready(Some(Err(Error::new(err)))),
+-            None => Poll::Ready(None),
+-        }
+-    }
+-}
++pub type BodyDataStream = http_body_util::BodyDataStream<Body>;
++pub use http_body_util::StreamBody;
+ 
+ #[test]
+ fn test_try_downcast() {
+diff --git a/axum-core/src/ext_traits/request.rs b/axum-core/src/ext_traits/request.rs
+index 1123fdd3..71152647 100644
+--- a/axum-core/src/ext_traits/request.rs
++++ b/axum-core/src/ext_traits/request.rs
+@@ -286,31 +286,15 @@ impl RequestExt for Request {
+         self.extract_parts_with_state(&())
+     }
+ 
+-    async fn extract_parts_with_state<'a, E, S>(
++    fn extract_parts_with_state<'a, E, S>(
+         &'a mut self,
+         state: &'a S,
+-    ) -> Result<E, E::Rejection>
++    ) -> impl Future<Output = Result<E, E::Rejection>> + Send
+     where
+         E: FromRequestParts<S> + 'static,
+         S: Send + Sync,
+     {
+-        let mut req = Request::new(());
+-        *req.version_mut() = self.version();
+-        *req.method_mut() = self.method().clone();
+-        *req.uri_mut() = self.uri().clone();
+-        *req.headers_mut() = std::mem::take(self.headers_mut());
+-        *req.extensions_mut() = std::mem::take(self.extensions_mut());
+-        let (mut parts, ()) = req.into_parts();
+-
+-        let result = E::from_request_parts(&mut parts, state).await;
+-
+-        *self.version_mut() = parts.version;
+-        *self.method_mut() = parts.method.clone();
+-        *self.uri_mut() = parts.uri.clone();
+-        *self.headers_mut() = std::mem::take(&mut parts.headers);
+-        *self.extensions_mut() = std::mem::take(&mut parts.extensions);
+-
+-        result
++        E::from_request_parts(self.parts_mut(), state)
+     }
+ 
+     fn with_limited_body(self) -> Request {
+diff --git a/axum-core/src/extract/rejection.rs b/axum-core/src/extract/rejection.rs
+index c5c3b1db..0845ea1e 100644
+--- a/axum-core/src/extract/rejection.rs
++++ b/axum-core/src/extract/rejection.rs
+@@ -15,7 +15,7 @@ composite_rejection! {
+ }
+ 
+ impl FailedToBufferBody {
+-    pub(crate) fn from_err<E>(err: E) -> Self
++    pub fn from_err<E>(err: E) -> Self
+     where
+         E: Into<BoxError>,
+     {
+diff --git a/axum-core/src/extract/tuple.rs b/axum-core/src/extract/tuple.rs
+index abbe181a..39f8b49b 100644
+--- a/axum-core/src/extract/tuple.rs
++++ b/axum-core/src/extract/tuple.rs
+@@ -55,16 +55,14 @@ macro_rules! impl_from_request {
+         {
+             type Rejection = Response;
+ 
+-            fn from_request(req: Request, state: &S) -> impl Future<Output = Result<Self, Self::Rejection>> {
+-                let (mut parts, body) = req.into_parts();
+-
++            fn from_request(mut req: Request, state: &S) -> impl Future<Output = Result<Self, Self::Rejection>> {
+                 async move {
++                    let parts = req.parts_mut();
++
+                     $(
+-                        let $ty = $ty::from_request_parts(&mut parts, state).await.map_err(|err| err.into_response())?;
++                        let $ty = $ty::from_request_parts(parts, state).await.map_err(|err| err.into_response())?;
+                     )*
+ 
+-                    let req = Request::from_parts(parts, body);
+-
+                     let $last = $last::from_request(req, state).await.map_err(|err| err.into_response())?;
+ 
+                     Ok(($($ty,)* $last,))
+diff --git a/axum-core/src/response/into_response.rs b/axum-core/src/response/into_response.rs
+index 915b55ef..b004f5c8 100644
+--- a/axum-core/src/response/into_response.rs
++++ b/axum-core/src/response/into_response.rs
+@@ -368,7 +368,7 @@ where
+ {
+     fn into_response(self) -> Response {
+         let (parts, res) = self;
+-        (parts.status, parts.headers, parts.extensions, res).into_response()
++        (parts.status, parts.version, parts.headers, parts.extensions, res).into_response()
+     }
+ }
+ 
+diff --git a/axum-core/src/response/into_response_parts.rs b/axum-core/src/response/into_response_parts.rs
+index 95564823..93ec4428 100644
+--- a/axum-core/src/response/into_response_parts.rs
++++ b/axum-core/src/response/into_response_parts.rs
+@@ -1,7 +1,7 @@
+ use super::{IntoResponse, Response};
+ use http::{
+     header::{HeaderMap, HeaderName, HeaderValue},
+-    Extensions, StatusCode,
++    Extensions, StatusCode, Version,
+ };
+ use std::{convert::Infallible, fmt};
+ 
+@@ -104,6 +104,18 @@ pub struct ResponseParts {
+ }
+ 
+ impl ResponseParts {
++    /// Gets a reference to the response version.
++    #[must_use]
++    pub fn version(&self) -> Version {
++        self.res.version()
++    }
++
++    /// Gets a mutable reference to the response version.
++    #[must_use]
++    pub fn version_mut(&mut self) -> &mut Version {
++        self.res.version_mut()
++    }
++
+     /// Gets a reference to the response headers.
+     #[must_use]
+     pub fn headers(&self) -> &HeaderMap {
+@@ -263,6 +275,15 @@ impl IntoResponseParts for Extensions {
+     }
+ }
+ 
++impl IntoResponseParts for Version {
++    type Error = Infallible;
++
++    fn into_response_parts(self, mut res: ResponseParts) -> Result<ResponseParts, Self::Error> {
++        *res.version_mut() = self;
++        Ok(res)
++    }
++}
++
+ impl IntoResponseParts for () {
+     type Error = Infallible;
+ 
+diff --git a/axum/Cargo.toml b/axum/Cargo.toml
+index 13c50357..f2bde6a6 100644
+--- a/axum/Cargo.toml
++++ b/axum/Cargo.toml
+@@ -100,13 +100,12 @@ http = "1.0.0"
+ http-body = "1.0.0"
+ http-body-util = "0.1.0"
+ itoa = "1.0.5"
+-matchit = "=0.8.4"
++matchit = "0.9"
+ memchr = "2.4.1"
+ mime = "0.3.16"
+ percent-encoding = "2.1"
+ pin-project-lite = "0.2.7"
+ serde_core = "1.0.221"
+-sync_wrapper = "1.0.0"
+ tower = { version = "0.5.2", default-features = false, features = ["util"] }
+ tower-layer = "0.3.2"
+ tower-service = "0.3"
+@@ -121,7 +120,7 @@ hyper-util = { version = "0.1.4", features = ["tokio", "server", "service"], opt
+ multer = { version = "3.0.0", optional = true }
+ reqwest = { version = "0.12", optional = true, default-features = false, features = ["json", "stream", "multipart"] }
+ serde_html_form = { version = "0.3.2", optional = true }
+-serde_json = { version = "1.0", features = ["raw_value"], optional = true }
++serde_json = { version = "1.0", optional = true }
+ serde_path_to_error = { version = "0.1.8", optional = true }
+ sha1 = { version = "0.10", optional = true }
+ tokio = { package = "tokio", version = "1.44", features = ["time"], optional = true }
+diff --git a/axum/src/error_handling/mod.rs b/axum/src/error_handling/mod.rs
+index 90da3e97..1d34f886 100644
+--- a/axum/src/error_handling/mod.rs
++++ b/axum/src/error_handling/mod.rs
+@@ -174,24 +174,22 @@ macro_rules! impl_service {
+             }
+ 
+             #[allow(non_snake_case)]
+-            fn call(&mut self, req: Request<B>) -> Self::Future {
++            fn call(&mut self, mut req: Request<B>) -> Self::Future {
+                 let f = self.f.clone();
+ 
+                 let clone = self.inner.clone();
+                 let inner = std::mem::replace(&mut self.inner, clone);
+ 
+-                let (mut parts, body) = req.into_parts();
+-
+                 let future = Box::pin(async move {
++                    let parts = req.parts_mut();
++
+                     $(
+-                        let $ty = match $ty::from_request_parts(&mut parts, &()).await {
++                        let $ty = match $ty::from_request_parts(parts, &()).await {
+                             Ok(value) => value,
+                             Err(rejection) => return Ok(rejection.into_response()),
+                         };
+                     )*
+ 
+-                    let req = Request::from_parts(parts, body);
+-
+                     match inner.oneshot(req).await {
+                         Ok(res) => Ok(res.into_response()),
+                         Err(err) => Ok(f($($ty),*, err).await.into_response()),
+diff --git a/axum/src/extract/path/mod.rs b/axum/src/extract/path/mod.rs
+index 44b2a323..7a99619d 100644
+--- a/axum/src/extract/path/mod.rs
++++ b/axum/src/extract/path/mod.rs
+@@ -161,10 +161,19 @@ where
+ {
+     type Rejection = PathRejection;
+ 
+-    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
++    fn from_request_parts(parts: &mut Parts, _state: &S) -> core::future::Ready<Result<Self, Self::Rejection>> {
++        core::future::ready(Self::try_from_extensions(&parts.extensions))
++    }
++}
++
++impl<T> Path<T>
++where
++    T: DeserializeOwned,
++{
++    pub fn try_from_extensions(extensions: &http::Extensions) -> Result<Self, PathRejection> {
+         // Extracted into separate fn so it's only compiled once for all T.
+-        fn get_params(parts: &Parts) -> Result<&[(Arc<str>, PercentDecodedStr)], PathRejection> {
+-            match parts.extensions.get::<UrlParams>() {
++        fn get_params(extensions: &http::Extensions) -> Result<&[(Arc<str>, PercentDecodedStr)], PathRejection> {
++            match extensions.get::<UrlParams>() {
+                 Some(UrlParams::Params(params)) => Ok(params),
+                 Some(UrlParams::InvalidUtf8InPathParam { key }) => {
+                     let err = PathDeserializationError {
+@@ -182,7 +191,7 @@ where
+             PathRejection::FailedToDeserializePathParams(FailedToDeserializePathParams(err))
+         }
+ 
+-        match T::deserialize(de::PathDeserializer::new(get_params(parts)?)) {
++        match T::deserialize(de::PathDeserializer::new(get_params(extensions)?)) {
+             Ok(val) => Ok(Self(val)),
+             Err(e) => Err(failed_to_deserialize_path_params(e)),
+         }
+@@ -506,38 +515,30 @@ where
+ {
+     type Rejection = RawPathParamsRejection;
+ 
+-    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
++    fn from_request_parts(parts: &mut Parts, _state: &S) -> core::future::Ready<Result<Self, Self::Rejection>> {
+         let params = match parts.extensions.get::<UrlParams>() {
+             Some(UrlParams::Params(params)) => params,
+             Some(UrlParams::InvalidUtf8InPathParam { key }) => {
+-                return Err(InvalidUtf8InPathParam {
++                return core::future::ready(Err(InvalidUtf8InPathParam {
+                     key: Arc::clone(key),
+                 }
+-                .into());
++                .into()));
+             }
+             None => {
+-                return Err(MissingPathParams.into());
++                return core::future::ready(Err(MissingPathParams.into()));
+             }
+         };
+ 
+-        Ok(Self(params.clone()))
++        core::future::ready(Ok(Self(params.clone())))
+     }
+ }
+ 
+-impl RawPathParams {
+-    /// Get an iterator over the path parameters.
+-    #[must_use]
+-    pub fn iter(&self) -> RawPathParamsIter<'_> {
+-        self.into_iter()
+-    }
+-}
+-
+-impl<'a> IntoIterator for &'a RawPathParams {
+-    type Item = (&'a str, &'a str);
+-    type IntoIter = RawPathParamsIter<'a>;
++impl IntoIterator for RawPathParams {
++    type Item = (Arc<str>, Arc<str>);
++    type IntoIter = RawPathParamsIter;
+ 
+     fn into_iter(self) -> Self::IntoIter {
+-        RawPathParamsIter(self.0.iter())
++        RawPathParamsIter(self.0.into_iter())
+     }
+ }
+ 
+@@ -545,14 +546,18 @@ impl<'a> IntoIterator for &'a RawPathParams {
+ ///
+ /// Created with [`RawPathParams::iter`].
+ #[derive(Debug)]
+-pub struct RawPathParamsIter<'a>(std::slice::Iter<'a, (Arc<str>, PercentDecodedStr)>);
++pub struct RawPathParamsIter(std::vec::IntoIter<(Arc<str>, PercentDecodedStr)>);
+ 
+-impl<'a> Iterator for RawPathParamsIter<'a> {
+-    type Item = (&'a str, &'a str);
++impl Iterator for RawPathParamsIter {
++    type Item = (Arc<str>, Arc<str>);
+ 
+     fn next(&mut self) -> Option<Self::Item> {
+         let (key, value) = self.0.next()?;
+-        Some((&**key, value.as_str()))
++        Some((key, value.0))
++    }
++
++    fn size_hint(&self) -> (usize, Option<usize>) {
++        self.0.size_hint()
+     }
+ }
+ 
+diff --git a/axum/src/extract/query.rs b/axum/src/extract/query.rs
+index 192e1e58..ccf8ae11 100644
+--- a/axum/src/extract/query.rs
++++ b/axum/src/extract/query.rs
+@@ -42,13 +42,13 @@ pub struct Query<T>(pub T);
+ 
+ impl<T, S> FromRequestParts<S> for Query<T>
+ where
+-    T: DeserializeOwned,
++    T: DeserializeOwned + Send,
+     S: Send + Sync,
+ {
+     type Rejection = QueryRejection;
+ 
+-    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+-        Self::try_from_uri(&parts.uri)
++    fn from_request_parts(parts: &mut Parts, _state: &S) -> core::future::Ready<Result<Self, Self::Rejection>> {
++        core::future::ready(Self::try_from_uri(&parts.uri))
+     }
+ }
+ 
+diff --git a/axum/src/extract/ws.rs b/axum/src/extract/ws.rs
+index 9f9e6eb0..bd628764 100644
+--- a/axum/src/extract/ws.rs
++++ b/axum/src/extract/ws.rs
+@@ -117,6 +117,10 @@ use tokio_tungstenite::{
+     },
+     WebSocketStream,
+ };
++pub use ts::{
++    protocol::{frame::coding::CloseCode, CloseFrame},
++    Utf8Bytes,
++};
+ 
+ /// Extractor for establishing WebSocket connections.
+ ///
+@@ -512,8 +516,8 @@ impl WebSocket {
+     /// Receive another message.
+     ///
+     /// Returns `None` if the stream has closed.
+-    pub async fn recv(&mut self) -> Option<Result<Message, Error>> {
+-        self.next().await
++    pub fn recv(&mut self) -> impl Future<Output = Option<Result<Message, Error>>> + Send + '_ {
++        self.next()
+     }
+ 
+     /// Send a message.
+@@ -528,6 +532,10 @@ impl WebSocket {
+     pub fn protocol(&self) -> Option<&HeaderValue> {
+         self.protocol.as_ref()
+     }
++
++    pub fn into_inner(self) -> (WebSocketStream<TokioIo<hyper::upgrade::Upgraded>>, Option<HeaderValue>) {
++        (self.inner, self.protocol)
++    }
+ }
+ 
+ impl FusedStream for WebSocket {
+@@ -577,134 +585,6 @@ impl Sink<Message> for WebSocket {
+     }
+ }
+ 
+-/// UTF-8 wrapper for [Bytes].
+-///
+-/// An [Utf8Bytes] is always guaranteed to contain valid UTF-8.
+-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+-pub struct Utf8Bytes(ts::Utf8Bytes);
+-
+-impl Utf8Bytes {
+-    /// Creates from a static str.
+-    #[inline]
+-    #[must_use]
+-    pub const fn from_static(str: &'static str) -> Self {
+-        Self(ts::Utf8Bytes::from_static(str))
+-    }
+-
+-    /// Returns as a string slice.
+-    #[inline]
+-    pub fn as_str(&self) -> &str {
+-        self.0.as_str()
+-    }
+-
+-    fn into_tungstenite(self) -> ts::Utf8Bytes {
+-        self.0
+-    }
+-}
+-
+-impl std::ops::Deref for Utf8Bytes {
+-    type Target = str;
+-
+-    /// ```
+-    /// /// Example fn that takes a str slice
+-    /// fn a(s: &str) {}
+-    ///
+-    /// let data = axum::extract::ws::Utf8Bytes::from_static("foo123");
+-    ///
+-    /// // auto-deref as arg
+-    /// a(&data);
+-    ///
+-    /// // deref to str methods
+-    /// assert_eq!(data.len(), 6);
+-    /// ```
+-    #[inline]
+-    fn deref(&self) -> &Self::Target {
+-        self.as_str()
+-    }
+-}
+-
+-impl std::fmt::Display for Utf8Bytes {
+-    #[inline]
+-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+-        f.write_str(self.as_str())
+-    }
+-}
+-
+-impl TryFrom<Bytes> for Utf8Bytes {
+-    type Error = std::str::Utf8Error;
+-
+-    #[inline]
+-    fn try_from(bytes: Bytes) -> Result<Self, Self::Error> {
+-        Ok(Self(bytes.try_into()?))
+-    }
+-}
+-
+-impl TryFrom<Vec<u8>> for Utf8Bytes {
+-    type Error = std::str::Utf8Error;
+-
+-    #[inline]
+-    fn try_from(v: Vec<u8>) -> Result<Self, Self::Error> {
+-        Ok(Self(v.try_into()?))
+-    }
+-}
+-
+-impl From<String> for Utf8Bytes {
+-    #[inline]
+-    fn from(s: String) -> Self {
+-        Self(s.into())
+-    }
+-}
+-
+-impl From<&str> for Utf8Bytes {
+-    #[inline]
+-    fn from(s: &str) -> Self {
+-        Self(s.into())
+-    }
+-}
+-
+-impl From<&String> for Utf8Bytes {
+-    #[inline]
+-    fn from(s: &String) -> Self {
+-        Self(s.into())
+-    }
+-}
+-
+-impl From<Utf8Bytes> for Bytes {
+-    #[inline]
+-    fn from(Utf8Bytes(bytes): Utf8Bytes) -> Self {
+-        bytes.into()
+-    }
+-}
+-
+-impl<T> PartialEq<T> for Utf8Bytes
+-where
+-    for<'a> &'a str: PartialEq<T>,
+-{
+-    /// ```
+-    /// let payload = axum::extract::ws::Utf8Bytes::from_static("foo123");
+-    /// assert_eq!(payload, "foo123");
+-    /// assert_eq!(payload, "foo123".to_string());
+-    /// assert_eq!(payload, &"foo123".to_string());
+-    /// assert_eq!(payload, std::borrow::Cow::from("foo123"));
+-    /// ```
+-    #[inline]
+-    fn eq(&self, other: &T) -> bool {
+-        self.as_str() == *other
+-    }
+-}
+-
+-/// Status code used to indicate why an endpoint is closing the WebSocket connection.
+-pub type CloseCode = u16;
+-
+-/// A struct representing the close command.
+-#[derive(Debug, Clone, Eq, PartialEq)]
+-pub struct CloseFrame {
+-    /// The reason as a code.
+-    pub code: CloseCode,
+-    /// The reason as text string.
+-    pub reason: Utf8Bytes,
+-}
+-
+ /// A WebSocket message.
+ //
+ // This code comes from https://github.com/snapview/tungstenite-rs/blob/master/src/protocol/message.rs and is under following license:
+@@ -774,29 +654,21 @@ pub enum Message {
+ impl Message {
+     fn into_tungstenite(self) -> ts::Message {
+         match self {
+-            Self::Text(text) => ts::Message::Text(text.into_tungstenite()),
++            Self::Text(text) => ts::Message::Text(text),
+             Self::Binary(binary) => ts::Message::Binary(binary),
+             Self::Ping(ping) => ts::Message::Ping(ping),
+             Self::Pong(pong) => ts::Message::Pong(pong),
+-            Self::Close(Some(close)) => ts::Message::Close(Some(ts::protocol::CloseFrame {
+-                code: ts::protocol::frame::coding::CloseCode::from(close.code),
+-                reason: close.reason.into_tungstenite(),
+-            })),
+-            Self::Close(None) => ts::Message::Close(None),
++            Self::Close(frame) => ts::Message::Close(frame),
+         }
+     }
+ 
+     fn from_tungstenite(message: ts::Message) -> Option<Self> {
+         match message {
+-            ts::Message::Text(text) => Some(Self::Text(Utf8Bytes(text))),
++            ts::Message::Text(text) => Some(Self::Text(text)),
+             ts::Message::Binary(binary) => Some(Self::Binary(binary)),
+             ts::Message::Ping(ping) => Some(Self::Ping(ping)),
+             ts::Message::Pong(pong) => Some(Self::Pong(pong)),
+-            ts::Message::Close(Some(close)) => Some(Self::Close(Some(CloseFrame {
+-                code: close.code.into(),
+-                reason: Utf8Bytes(close.reason),
+-            }))),
+-            ts::Message::Close(None) => Some(Self::Close(None)),
++            ts::Message::Close(frame) => Some(Self::Close(frame)),
+             // we can ignore `Frame` frames as recommended by the tungstenite maintainers
+             // https://github.com/snapview/tungstenite-rs/issues/268
+             ts::Message::Frame(_) => None,
+diff --git a/axum/src/handler/mod.rs b/axum/src/handler/mod.rs
+index 36c06b8d..ea3183db 100644
+--- a/axum/src/handler/mod.rs
++++ b/axum/src/handler/mod.rs
+@@ -211,10 +211,10 @@ where
+     Fut: Future<Output = Res> + Send,
+     Res: IntoResponse,
+ {
+-    type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
++    type Future = impl Future<Output = Response> + Send + 'static;
+ 
+     fn call(self, _req: Request, _state: S) -> Self::Future {
+-        Box::pin(async move { self().await.into_response() })
++        async move { self().await.into_response() }
+     }
+ }
+ 
+@@ -233,27 +233,26 @@ macro_rules! impl_handler {
+             $( $ty: FromRequestParts<S> + Send, )*
+             $last: FromRequest<S, M> + Send,
+         {
+-            type Future = Pin<Box<dyn Future<Output = Response> + Send>>;
++            type Future = impl Future<Output = Response> + Send + 'static;
++
++            fn call(self, mut req: Request, state: S) -> Self::Future {
++                async move {
++                    let parts = req.parts_mut();
+ 
+-            fn call(self, req: Request, state: S) -> Self::Future {
+-                let (mut parts, body) = req.into_parts();
+-                Box::pin(async move {
+                     $(
+-                        let $ty = match $ty::from_request_parts(&mut parts, &state).await {
++                        let $ty = match $ty::from_request_parts(parts, &state).await {
+                             Ok(value) => value,
+                             Err(rejection) => return rejection.into_response(),
+                         };
+                     )*
+ 
+-                    let req = Request::from_parts(parts, body);
+-
+                     let $last = match $last::from_request(req, &state).await {
+                         Ok(value) => value,
+                         Err(rejection) => return rejection.into_response(),
+                     };
+ 
+                     self($($ty,)* $last,).await.into_response()
+-                })
++                }
+             }
+         }
+     };
+diff --git a/axum/src/json.rs b/axum/src/json.rs
+index 5eec9c2e..dc976e0a 100644
+--- a/axum/src/json.rs
++++ b/axum/src/json.rs
+@@ -1,12 +1,13 @@
+ use crate::extract::Request;
+ use crate::extract::{rejection::*, FromRequest};
+ use axum_core::extract::OptionalFromRequest;
+-use axum_core::response::{IntoResponse, Response};
+-use bytes::{BufMut, Bytes, BytesMut};
++use axum_core::{response::{IntoResponse, Response}, RequestExt};
++use bytes::{Buf, BufMut, Bytes, BytesMut};
+ use http::{
+     header::{self, HeaderMap, HeaderValue},
+     StatusCode,
+ };
++use http_body_util::BodyExt;
+ use serde_core::{de::DeserializeOwned, Serialize};
+ 
+ /// JSON Extractor / Response.
+@@ -108,8 +109,15 @@ where
+             return Err(MissingJsonContentType.into());
+         }
+ 
+-        let bytes = Bytes::from_request(req, state).await?;
+-        Self::from_bytes(&bytes)
++        let reader = req
++            .into_limited_body()
++            .collect()
++            .await
++            .map_err(FailedToBufferBody::from_err)
++            .map_err(BytesRejection::from)?
++            .aggregate()
++            .reader();
++        Self::from_reader(reader)
+     }
+ }
+ 
+@@ -124,8 +132,15 @@ where
+         let headers = req.headers();
+         if headers.get(header::CONTENT_TYPE).is_some() {
+             if json_content_type(headers) {
+-                let bytes = Bytes::from_request(req, state).await?;
+-                Ok(Some(Self::from_bytes(&bytes)?))
++                let reader = req
++                    .into_limited_body()
++                    .collect()
++                    .await
++                    .map_err(FailedToBufferBody::from_err)
++                    .map_err(BytesRejection::from)?
++                    .aggregate()
++                    .reader();
++                Ok(Some(Self::from_reader(reader)?))
+             } else {
+                 Err(MissingJsonContentType.into())
+             }
+@@ -161,27 +176,18 @@ where
+     /// Construct a `Json<T>` from a byte slice. Most users should prefer to use the `FromRequest` impl
+     /// but special cases may require first extracting a `Request` into `Bytes` then optionally
+     /// constructing a `Json<T>`.
+-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, JsonRejection> {
++    pub fn from_reader<R: std::io::Read>(reader: R) -> Result<Self, JsonRejection> {
+         // Extracted into separate fn so it's only compiled once for all T.
+         fn make_rejection(err: serde_path_to_error::Error<serde_json::Error>) -> JsonRejection {
+             match err.inner().classify() {
+                 serde_json::error::Category::Data => JsonDataError::from_err(err).into(),
+-                serde_json::error::Category::Syntax | serde_json::error::Category::Eof => {
+-                    JsonSyntaxError::from_err(err).into()
+-                }
+-                serde_json::error::Category::Io => {
+-                    if cfg!(debug_assertions) {
+-                        // we don't use `serde_json::from_reader` and instead always buffer
+-                        // bodies first, so we shouldn't encounter any IO errors
+-                        unreachable!()
+-                    } else {
+-                        JsonSyntaxError::from_err(err).into()
+-                    }
+-                }
++                serde_json::error::Category::Syntax
++                | serde_json::error::Category::Eof
++                | serde_json::error::Category::Io => JsonSyntaxError::from_err(err).into(),
+             }
+         }
+ 
+-        let mut deserializer = serde_json::Deserializer::from_slice(bytes);
++        let mut deserializer = serde_json::Deserializer::from_reader(reader);
+ 
+         serde_path_to_error::deserialize(&mut deserializer)
+             .map_err(make_rejection)
+diff --git a/axum/src/lib.rs b/axum/src/lib.rs
+index 866f5eab..6b29fe56 100644
+--- a/axum/src/lib.rs
++++ b/axum/src/lib.rs
+@@ -430,6 +430,7 @@
+ #![cfg_attr(docsrs, feature(doc_cfg))]
+ #![cfg_attr(test, allow(clippy::float_cmp))]
+ #![cfg_attr(not(test), warn(clippy::print_stdout, clippy::dbg_macro))]
++#![feature(exclusive_wrapper, impl_trait_in_assoc_type)]
+ 
+ #[macro_use]
+ pub(crate) mod macros;
+@@ -479,9 +480,9 @@ pub use axum_core::{BoxError, Error, RequestExt, RequestPartsExt};
+ #[cfg(feature = "macros")]
+ pub use axum_macros::{debug_handler, debug_middleware};
+ 
+-#[cfg(all(feature = "tokio", any(feature = "http1", feature = "http2")))]
+-#[doc(inline)]
+-pub use self::serve::serve;
++// #[cfg(all(feature = "tokio", any(feature = "http1", feature = "http2")))]
++// #[doc(inline)]
++// pub use self::serve::serve;
+ 
+ pub use self::service_ext::ServiceExt;
+ 
+diff --git a/axum/src/middleware/from_extractor.rs b/axum/src/middleware/from_extractor.rs
+index 17293f9d..a74278ac 100644
+--- a/axum/src/middleware/from_extractor.rs
++++ b/axum/src/middleware/from_extractor.rs
+@@ -212,13 +212,11 @@ where
+         self.inner.poll_ready(cx)
+     }
+ 
+-    fn call(&mut self, req: Request<B>) -> Self::Future {
++    fn call(&mut self, mut req: Request<B>) -> Self::Future {
+         let state = self.state.clone();
+-        let (mut parts, body) = req.into_parts();
+ 
+         let extract_future = Box::pin(async move {
+-            let extracted = E::from_request_parts(&mut parts, &state).await;
+-            let req = Request::from_parts(parts, body);
++            let extracted = E::from_request_parts(req.parts_mut(), &state).await;
+             (req, extracted)
+         });
+ 
+diff --git a/axum/src/middleware/from_fn.rs b/axum/src/middleware/from_fn.rs
+index 3762fd61..cb16bc80 100644
+--- a/axum/src/middleware/from_fn.rs
++++ b/axum/src/middleware/from_fn.rs
+@@ -280,24 +280,23 @@ macro_rules! impl_service {
+                 self.inner.poll_ready(cx)
+             }
+ 
+-            fn call(&mut self, req: Request) -> Self::Future {
++            fn call(&mut self, mut req: Request) -> Self::Future {
+                 let not_ready_inner = self.inner.clone();
+                 let ready_inner = std::mem::replace(&mut self.inner, not_ready_inner);
+ 
+                 let mut f = self.f.clone();
+                 let state = self.state.clone();
+-                let (mut parts, body) = req.into_parts();
+ 
+                 let future = Box::pin(async move {
++                    let parts = req.parts_mut();
++
+                     $(
+-                        let $ty = match $ty::from_request_parts(&mut parts, &state).await {
++                        let $ty = match $ty::from_request_parts(parts, &state).await {
+                             Ok(value) => value,
+                             Err(rejection) => return rejection.into_response(),
+                         };
+                     )*
+ 
+-                    let req = Request::from_parts(parts, body);
+-
+                     let $last = match $last::from_request(req, &state).await {
+                         Ok(value) => value,
+                         Err(rejection) => return rejection.into_response(),
+diff --git a/axum/src/middleware/map_request.rs b/axum/src/middleware/map_request.rs
+index 3a90bc65..80cee7ce 100644
+--- a/axum/src/middleware/map_request.rs
++++ b/axum/src/middleware/map_request.rs
+@@ -275,25 +275,24 @@ macro_rules! impl_service {
+             }
+ 
+             fn call(&mut self, req: Request<B>) -> Self::Future {
+-                let req = req.map(Body::new);
++                let mut req = req.map(Body::new);
+ 
+                 let not_ready_inner = self.inner.clone();
+                 let mut ready_inner = std::mem::replace(&mut self.inner, not_ready_inner);
+ 
+                 let mut f = self.f.clone();
+                 let state = self.state.clone();
+-                let (mut parts, body) = req.into_parts();
+ 
+                 let future = Box::pin(async move {
++                    let parts = req.parts_mut();
++
+                     $(
+-                        let $ty = match $ty::from_request_parts(&mut parts, &state).await {
++                        let $ty = match $ty::from_request_parts(parts, &state).await {
+                             Ok(value) => value,
+                             Err(rejection) => return rejection.into_response(),
+                         };
+                     )*
+ 
+-                    let req = Request::from_parts(parts, body);
+-
+                     let $last = match $last::from_request(req, &state).await {
+                         Ok(value) => value,
+                         Err(rejection) => return rejection.into_response(),
+diff --git a/axum/src/middleware/map_response.rs b/axum/src/middleware/map_response.rs
+index c97b261e..24ce2084 100644
+--- a/axum/src/middleware/map_response.rs
++++ b/axum/src/middleware/map_response.rs
+@@ -255,24 +255,23 @@ macro_rules! impl_service {
+             }
+ 
+ 
+-            fn call(&mut self, req: Request<B>) -> Self::Future {
++            fn call(&mut self, mut req: Request<B>) -> Self::Future {
+                 let not_ready_inner = self.inner.clone();
+                 let mut ready_inner = std::mem::replace(&mut self.inner, not_ready_inner);
+ 
+                 let mut f = self.f.clone();
+                 let _state = self.state.clone();
+-                let (mut parts, body) = req.into_parts();
+ 
+                 let future = Box::pin(async move {
++                    let parts = req.parts_mut();
++
+                     $(
+-                        let $ty = match $ty::from_request_parts(&mut parts, &_state).await {
++                        let $ty = match $ty::from_request_parts(parts, &_state).await {
+                             Ok(value) => value,
+                             Err(rejection) => return rejection.into_response(),
+                         };
+                     )*
+ 
+-                    let req = Request::from_parts(parts, body);
+-
+                     match ready_inner.call(req).await {
+                         Ok(res) => {
+                             f($($ty,)* res).await.into_response()
+diff --git a/axum/src/response/sse.rs b/axum/src/response/sse.rs
+index cb289219..0872ce1f 100644
+--- a/axum/src/response/sse.rs
++++ b/axum/src/response/sse.rs
+@@ -43,10 +43,10 @@ use std::{
+     io::Write as _,
+     mem,
+     pin::Pin,
++    sync::Exclusive,
+     task::{ready, Context, Poll},
+     time::Duration,
+ };
+-use sync_wrapper::SyncWrapper;
+ 
+ /// An SSE response
+ #[derive(Clone)]
+@@ -99,7 +99,7 @@ where
+                 (http::header::CACHE_CONTROL, "no-cache"),
+             ],
+             Body::new(SseBody {
+-                event_stream: SyncWrapper::new(self.stream),
++                event_stream: Exclusive::new(self.stream),
+             }),
+         )
+             .into_response()
+@@ -109,7 +109,7 @@ where
+ pin_project! {
+     struct SseBody<S> {
+         #[pin]
+-        event_stream: SyncWrapper<S>,
++        event_stream: Exclusive<S>,
+     }
+ }
+ 
+diff --git a/axum/src/routing/mod.rs b/axum/src/routing/mod.rs
+index f9978333..ee03ea6f 100644
+--- a/axum/src/routing/mod.rs
++++ b/axum/src/routing/mod.rs
+@@ -432,7 +432,7 @@ where
+         })
+     }
+ 
+-    pub(crate) fn call_with_state(&self, req: Request, state: S) -> RouteFuture<Infallible> {
++    pub fn call_with_state(&self, req: Request, state: S) -> RouteFuture<Infallible> {
+         let (req, state) = match self.inner.path_router.call_with_state(req, state) {
+             Ok(future) => return future,
+             Err((req, state)) => (req, state),
+diff --git a/axum/src/routing/not_found.rs b/axum/src/routing/not_found.rs
+index dc3fec46..b09ef82f 100644
+--- a/axum/src/routing/not_found.rs
++++ b/axum/src/routing/not_found.rs
+@@ -1,5 +1,3 @@
+-use crate::response::Response;
+-use axum_core::response::IntoResponse;
+ use http::{Request, StatusCode};
+ use std::{
+     convert::Infallible,
+@@ -19,9 +17,9 @@ impl<B> Service<Request<B>> for NotFound
+ where
+     B: Send + 'static,
+ {
+-    type Response = Response;
++    type Response = StatusCode;
+     type Error = Infallible;
+-    type Future = std::future::Ready<Result<Response, Self::Error>>;
++    type Future = std::future::Ready<Result<StatusCode, Self::Error>>;
+ 
+     #[inline]
+     fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+@@ -29,6 +27,6 @@ where
+     }
+ 
+     fn call(&mut self, _req: Request<B>) -> Self::Future {
+-        ready(Ok(StatusCode::NOT_FOUND.into_response()))
++        ready(Ok(StatusCode::NOT_FOUND))
+     }
+ }
+diff --git a/axum/src/routing/path_router.rs b/axum/src/routing/path_router.rs
+index b1abe82c..4a5ed81b 100644
+--- a/axum/src/routing/path_router.rs
++++ b/axum/src/routing/path_router.rs
+@@ -337,9 +337,9 @@ where
+             }
+         }
+ 
+-        let (mut parts, body) = req.into_parts();
++        let mut parts = req.parts_mut();
+ 
+-        match self.node.at(parts.uri.path()) {
++        match self.node.inner.at(parts.uri.path()) {
+             Ok(match_) => {
+                 let id = *match_.value;
+ 
+@@ -357,7 +357,6 @@ where
+                     .get(id.0)
+                     .expect("no route for id. This is a bug in axum. Please file an issue");
+ 
+-                let req = Request::from_parts(parts, body);
+                 match endpoint {
+                     Endpoint::MethodRouter(method_router) => {
+                         Ok(method_router.call_with_state(req, state))
+@@ -367,7 +366,7 @@ where
+             }
+             // explicitly handle all variants in case matchit adds
+             // new ones we need to handle differently
+-            Err(MatchError::NotFound) => Err((Request::from_parts(parts, body), state)),
++            Err(MatchError::NotFound) => Err((req, state)),
+         }
+     }
+ }
+@@ -425,13 +424,6 @@ impl Node {
+ 
+         Ok(())
+     }
+-
+-    fn at<'n, 'p>(
+-        &'n self,
+-        path: &'p str,
+-    ) -> Result<matchit::Match<'n, 'p, &'n RouteId>, MatchError> {
+-        self.inner.at(path)
+-    }
+ }
+ 
+ impl fmt::Debug for Node {
+diff --git a/axum/src/routing/route.rs b/axum/src/routing/route.rs
+index deedb3a5..06b2452d 100644
+--- a/axum/src/routing/route.rs
++++ b/axum/src/routing/route.rs
+@@ -41,8 +41,7 @@ impl<E> Route<E> {
+     }
+ 
+     /// Variant of [`Route::call`] that takes ownership of the route to avoid cloning.
+-    pub(crate) fn call_owned(self, req: Request<Body>) -> RouteFuture<E> {
+-        let req = req.map(Body::new);
++    pub(crate) fn call_owned(self, req: Request) -> RouteFuture<E> {
+         self.oneshot_inner_owned(req).not_top_level()
+     }
+ 
+diff --git a/axum/src/routing/strip_prefix.rs b/axum/src/routing/strip_prefix.rs
+index 3209da3b..52438e92 100644
+--- a/axum/src/routing/strip_prefix.rs
++++ b/axum/src/routing/strip_prefix.rs
+@@ -66,7 +66,7 @@ fn strip_prefix(uri: &Uri, prefix: &str) -> Option<Uri> {
+ 
+         match item {
+             Item::Both(path_segment, prefix_segment) => {
+-                if is_capture(prefix_segment) || path_segment == prefix_segment {
++                if prefix_matches(prefix_segment, path_segment) {
+                     // the prefix segment is either a param, which matches anything, or
+                     // it actually matches the path segment
+                     *matching_prefix_length.as_mut().unwrap() += path_segment.len();
+@@ -148,12 +148,67 @@ where
+     })
+ }
+ 
+-fn is_capture(segment: &str) -> bool {
+-    segment.starts_with('{')
+-        && segment.ends_with('}')
+-        && !segment.starts_with("{{")
+-        && !segment.ends_with("}}")
+-        && !segment.starts_with("{*")
++fn prefix_matches(prefix_segment: &str, path_segment: &str) -> bool {
++    if let Some((prefix, suffix)) = capture_prefix_suffix(prefix_segment) {
++        path_segment.starts_with(prefix) && path_segment.ends_with(suffix)
++    } else {
++        prefix_segment == path_segment
++    }
++}
++
++/// Takes a segment and returns prefix and suffix of the path, omitting the capture. Currently,
++/// matchit supports only one capture so this can be a pair. If there is no capture, `None` is
++/// returned.
++fn capture_prefix_suffix(segment: &str) -> Option<(&str, &str)> {
++    fn find_first_not_double(needle: u8, haystack: &[u8]) -> Option<usize> {
++        let mut possible_capture = 0;
++        while let Some(index) = haystack
++            .get(possible_capture..)
++            .and_then(|haystack| haystack.iter().position(|byte| byte == &needle))
++        {
++            let index = index + possible_capture;
++
++            if haystack.get(index + 1) == Some(&needle) {
++                possible_capture = index + 2;
++                continue;
++            }
++
++            return Some(index);
++        }
++
++        None
++    }
++
++    let capture_start = find_first_not_double(b'{', segment.as_bytes())?;
++
++    let Some(capture_end) = find_first_not_double(b'}', segment.as_bytes()) else {
++        if cfg!(debug_assertions) {
++            panic!(
++                "Segment `{segment}` is malformed. It seems to contain a capture start but no \
++                capture end. This should have been rejected at application start, please file a \
++                bug in axum repository."
++            );
++        } else {
++            // This is very bad but let's not panic in production. This will most likely not match.
++            return None;
++        }
++    };
++
++    if capture_start > capture_end {
++        if cfg!(debug_assertions) {
++            panic!(
++                "Segment `{segment}` is malformed. It seems to contain a capture start after \
++                capture end. This should have been rejected at application start, please file a \
++                bug in axum repository."
++            );
++        } else {
++            // This is very bad but let's not panic in production. This will most likely not match.
++            return None;
++        }
++    }
++
++    // Slicing may panic but we found the indexes inside the string so this should be fine.
++    Some((&segment[..capture_start], &segment[capture_end + 1..]))
+ }
+ 
+ #[derive(Debug)]
+diff --git a/axum/src/serve/mod.rs b/axum/src/serve/mod.rs
+index 05751d2f..23ddc77b 100644
+--- a/axum/src/serve/mod.rs
++++ b/axum/src/serve/mod.rs
+@@ -223,7 +223,7 @@ where
+     }
+ }
+ 
+-#[cfg(all(feature = "tokio", any(feature = "http1", feature = "http2")))]
++#[cfg(all(feature = "tokio", any(feature = "http1", feature = "http2"), any()))]
+ impl<L, M, S, B> IntoFuture for Serve<L, M, S, B>
+ where
+     L: Listener,
+@@ -343,7 +343,7 @@ where
+     }
+ }
+ 
+-#[cfg(all(feature = "tokio", any(feature = "http1", feature = "http2")))]
++#[cfg(all(feature = "tokio", any(feature = "http1", feature = "http2"), any()))]
+ impl<L, M, S, F, B> IntoFuture for WithGracefulShutdown<L, M, S, F, B>
+ where
+     L: Listener,
+diff --git a/axum/src/test_helpers/tracing_helpers.rs b/axum/src/test_helpers/tracing_helpers.rs
+index adf4331f..a636a03e 100644
+--- a/axum/src/test_helpers/tracing_helpers.rs
++++ b/axum/src/test_helpers/tracing_helpers.rs
+@@ -120,7 +120,10 @@ impl io::Write for Writer<'_> {
+                 vec.extend(buf);
+                 Ok(len)
+             }
+-            None => Err(io::Error::other("inner writer has been taken")),
++            None => Err(io::const_error!(
++                io::ErrorKind::Other,
++                "inner writer has been taken",
++            )),
+         }
+     }
+ 
+diff --git a/axum/src/util.rs b/axum/src/util.rs
+index e4014c59..4129d6fa 100644
+--- a/axum/src/util.rs
++++ b/axum/src/util.rs
+@@ -10,7 +10,7 @@ use std::{
+ use tower::Service;
+ 
+ #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+-pub(crate) struct PercentDecodedStr(Arc<str>);
++pub(crate) struct PercentDecodedStr(pub(crate) Arc<str>);
+ 
+ impl PercentDecodedStr {
+     pub(crate) fn new<S>(s: S) -> Option<Self>
+@@ -103,9 +103,9 @@ where
+ {
+     let mut k = Some(k);
+     if let Some(k) = <dyn std::any::Any>::downcast_mut::<Option<T>>(&mut k) {
+-        Ok(k.take().unwrap())
++        Ok(unsafe { k.take().unwrap_unchecked() })
+     } else {
+-        Err(k.unwrap())
++        Err(unsafe { k.unwrap_unchecked() })
+     }
+ }
+ 

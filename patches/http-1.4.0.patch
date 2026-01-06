@@ -1,0 +1,190 @@
+diff --git a/src/lib.rs b/src/lib.rs
+index 0ab5bdf..d754a40 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -155,6 +155,8 @@
+ 
+ #![deny(warnings, missing_docs, missing_debug_implementations)]
+ 
++#![feature(rustc_attrs)]
++
+ //#![cfg_attr(not(feature = "std"), no_std)]
+ #[cfg(not(feature = "std"))]
+ compile_error!("`std` feature currently required, support for `no_std` may be added later");
+diff --git a/src/request.rs b/src/request.rs
+index 0eb36b7..66d1462 100644
+--- a/src/request.rs
++++ b/src/request.rs
+@@ -655,6 +655,16 @@ impl<T> Request<T> {
+         (self.head, self.body)
+     }
+ 
++    #[inline]
++    pub fn parts(&self) -> &Parts {
++        &self.head
++    }
++
++    #[inline]
++    pub fn parts_mut(&mut self) -> &mut Parts {
++        &mut self.head
++    }
++
+     /// Consumes the request returning a new request with body mapped to the
+     /// return type of the passed in function.
+     ///
+diff --git a/src/response.rs b/src/response.rs
+index b8fc9b2..abdbd92 100644
+--- a/src/response.rs
++++ b/src/response.rs
+@@ -448,6 +448,16 @@ impl<T> Response<T> {
+         (self.head, self.body)
+     }
+ 
++    #[inline]
++    pub fn parts(&self) -> &Parts {
++        &self.head
++    }
++
++    #[inline]
++    pub fn parts_mut(&mut self) -> &mut Parts {
++        &mut self.head
++    }
++
+     /// Consumes the response returning a new response with body mapped to the
+     /// return type of the passed in function.
+     ///
+diff --git a/src/status.rs b/src/status.rs
+index bc58ba4..926e749 100644
+--- a/src/status.rs
++++ b/src/status.rs
+@@ -17,7 +17,6 @@
+ use std::convert::TryFrom;
+ use std::error::Error;
+ use std::fmt;
+-use std::num::NonZeroU16;
+ use std::str::FromStr;
+ 
+ /// An HTTP status code (`status-code` in RFC 9110 et al.).
+@@ -42,7 +41,9 @@ use std::str::FromStr;
+ /// assert!(StatusCode::OK.is_success());
+ /// ```
+ #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+-pub struct StatusCode(NonZeroU16);
++#[rustc_layout_scalar_valid_range_start(100)]
++#[rustc_layout_scalar_valid_range_end(999)]
++pub struct StatusCode(u16);
+ 
+ /// A possible error value when converting a `StatusCode` from a `u16` or `&str`.
+ ///
+@@ -72,13 +73,16 @@ impl StatusCode {
+     #[inline]
+     pub const fn from_u16(src: u16) -> Result<StatusCode, InvalidStatusCode> {
+         if let 100..=999 = src {
+-            if let Some(code) = NonZeroU16::new(src) {
+-                return Ok(StatusCode(code));
+-            }
++            return Ok(unsafe { StatusCode(src) });
+         }
+         Err(InvalidStatusCode::new())
+     }
+ 
++    #[inline(always)]
++    pub const unsafe fn from_u16_unchecked(src: u16) -> StatusCode {
++        unsafe { StatusCode(src) }
++    }
++
+     /// Converts a `&[u8]` to a status code.
+     pub fn from_bytes(src: &[u8]) -> Result<StatusCode, InvalidStatusCode> {
+         if src.len() != 3 {
+@@ -93,10 +97,7 @@ impl StatusCode {
+             return Err(InvalidStatusCode::new());
+         }
+ 
+-        let status = (a * 100) + (b * 10) + c;
+-        NonZeroU16::new(status)
+-            .map(StatusCode)
+-            .ok_or_else(InvalidStatusCode::new)
++        Ok(unsafe { StatusCode((a * 100) + (b * 10) + c) })
+     }
+ 
+     /// Returns the `u16` corresponding to this `StatusCode`.
+@@ -116,7 +117,7 @@ impl StatusCode {
+     /// ```
+     #[inline]
+     pub const fn as_u16(&self) -> u16 {
+-        self.0.get()
++        self.0
+     }
+ 
+     /// Returns a &str representation of the `StatusCode`
+@@ -132,7 +133,7 @@ impl StatusCode {
+     /// ```
+     #[inline]
+     pub fn as_str(&self) -> &str {
+-        let offset = (self.0.get() - 100) as usize;
++        let offset = (self.0 - 100) as usize;
+         let offset = offset * 3;
+ 
+         // Invariant: self has checked range [100, 999] and CODE_DIGITS is
+@@ -168,37 +169,37 @@ impl StatusCode {
+     /// assert_eq!(status.canonical_reason(), Some("OK"));
+     /// ```
+     pub fn canonical_reason(&self) -> Option<&'static str> {
+-        canonical_reason(self.0.get())
++        canonical_reason(self.0)
+     }
+ 
+     /// Check if status is within 100-199.
+     #[inline]
+     pub fn is_informational(&self) -> bool {
+-        (100..200).contains(&self.0.get())
++        (100..200).contains(&self.0)
+     }
+ 
+     /// Check if status is within 200-299.
+     #[inline]
+     pub fn is_success(&self) -> bool {
+-        (200..300).contains(&self.0.get())
++        (200..300).contains(&self.0)
+     }
+ 
+     /// Check if status is within 300-399.
+     #[inline]
+     pub fn is_redirection(&self) -> bool {
+-        (300..400).contains(&self.0.get())
++        (300..400).contains(&self.0)
+     }
+ 
+     /// Check if status is within 400-499.
+     #[inline]
+     pub fn is_client_error(&self) -> bool {
+-        (400..500).contains(&self.0.get())
++        (400..500).contains(&self.0)
+     }
+ 
+     /// Check if status is within 500-599.
+     #[inline]
+     pub fn is_server_error(&self) -> bool {
+-        (500..600).contains(&self.0.get())
++        (500..600).contains(&self.0)
+     }
+ }
+ 
+@@ -251,7 +252,7 @@ impl PartialEq<StatusCode> for u16 {
+ impl From<StatusCode> for u16 {
+     #[inline]
+     fn from(status: StatusCode) -> u16 {
+-        status.0.get()
++        status.0
+     }
+ }
+ 
+@@ -307,7 +308,7 @@ macro_rules! status_codes {
+         impl StatusCode {
+         $(
+             $(#[$docs])*
+-            pub const $konst: StatusCode = StatusCode(unsafe { NonZeroU16::new_unchecked($num) });
++            pub const $konst: StatusCode = unsafe { StatusCode($num) };
+         )+
+ 
+         }

@@ -1,0 +1,57 @@
+diff --git a/src/lib.rs b/src/lib.rs
+index c5faec4..79d477a 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -69,7 +69,7 @@ mod macros;
+ 
+ mod control;
+ mod hasher;
+-mod raw;
++pub mod raw;
+ mod util;
+ 
+ mod external_trait_impls;
+diff --git a/src/raw_entry.rs b/src/raw_entry.rs
+index 480ebdb..baec2f3 100644
+--- a/src/raw_entry.rs
++++ b/src/raw_entry.rs
+@@ -1,6 +1,6 @@
+ use crate::hash_map::{equivalent, make_hash, make_hasher};
+ use crate::raw::{Allocator, Bucket, Global, RawTable};
+-use crate::{Equivalent, HashMap};
++use crate::{Equivalent, HashSet, HashMap};
+ use core::fmt::{self, Debug};
+ use core::hash::{BuildHasher, Hash};
+ use core::mem;
+@@ -158,6 +158,18 @@ impl<K, V, S, A: Allocator> HashMap<K, V, S, A> {
+     }
+ }
+ 
++impl<T, S, A: Allocator> HashSet<T, S, A> {
++    #[cfg_attr(feature = "inline-more", inline)]
++    pub fn raw_entry_mut(&mut self) -> RawEntryBuilderMut<'_, T, (), S, A> {
++        self.map.raw_entry_mut()
++    }
++
++    #[cfg_attr(feature = "inline-more", inline)]
++    pub fn raw_entry(&self) -> RawEntryBuilder<'_, T, (), S, A> {
++        self.map.raw_entry()
++    }
++}
++
+ /// A builder for computing where in a [`HashMap`] a key-value pair would be stored.
+ ///
+ /// See the [`HashMap::raw_entry_mut`] docs for usage examples.
+diff --git a/src/table.rs b/src/table.rs
+index b083c2b..34e429a 100644
+--- a/src/table.rs
++++ b/src/table.rs
+@@ -49,7 +49,7 @@ pub struct HashTable<T, A = Global>
+ where
+     A: Allocator,
+ {
+-    pub(crate) raw: RawTable<T, A>,
++    pub raw: RawTable<T, A>,
+ }
+ 
+ impl<T> HashTable<T, Global> {

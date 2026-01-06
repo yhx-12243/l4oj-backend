@@ -1,0 +1,183 @@
+diff --git a/src/de.rs b/src/de.rs
+index 4080c54..b94b381 100644
+--- a/src/de.rs
++++ b/src/de.rs
+@@ -4,7 +4,7 @@ use crate::error::{Error, ErrorCode, Result};
+ #[cfg(feature = "float_roundtrip")]
+ use crate::lexical;
+ use crate::number::Number;
+-use crate::read::{self, Fused, Reference};
++use crate::read::{self, Fused};
+ use alloc::string::String;
+ use alloc::vec::Vec;
+ #[cfg(feature = "float_roundtrip")]
+@@ -19,7 +19,7 @@ use serde::forward_to_deserialize_any;
+ #[cfg(feature = "arbitrary_precision")]
+ use crate::number::NumberDeserializer;
+ 
+-pub use crate::read::{Read, SliceRead, StrRead};
++pub use crate::read::{Read, Reference, SliceRead, StrRead};
+ 
+ #[cfg(feature = "std")]
+ #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
+diff --git a/src/error.rs b/src/error.rs
+index b74f444..d164757 100644
+--- a/src/error.rs
++++ b/src/error.rs
+@@ -111,6 +111,13 @@ impl Error {
+         self.classify() == Category::Eof
+     }
+ 
++    pub fn io_ref(&self) -> Option<&io::Error> {
++        match &self.err.code {
++            ErrorCode::Io(io_error) => Some(io_error),
++            _ => None,
++        }
++    }
++
+     /// The kind reported by the underlying standard library I/O error, if this
+     /// error was caused by a failure to read or write bytes on an I/O stream.
+     ///
+@@ -126,7 +133,7 @@ impl Error {
+     /// impl<'a> Read for ReaderThatWillTimeOut<'a> {
+     ///     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+     ///         if self.0.is_empty() {
+-    ///             Err(io::Error::new(ErrorKind::TimedOut, "timed out"))
++    ///             Err(io::const_error!(ErrorKind::TimedOut, "timed out"))
+     ///         } else {
+     ///             self.0.read(buf)
+     ///         }
+@@ -233,7 +240,7 @@ struct ErrorImpl {
+     column: usize,
+ }
+ 
+-pub(crate) enum ErrorCode {
++pub enum ErrorCode {
+     /// Catchall for syntax error messages
+     Message(Box<str>),
+ 
+@@ -312,7 +319,7 @@ pub(crate) enum ErrorCode {
+ 
+ impl Error {
+     #[cold]
+-    pub(crate) fn syntax(code: ErrorCode, line: usize, column: usize) -> Self {
++    pub fn syntax(code: ErrorCode, line: usize, column: usize) -> Self {
+         Error {
+             err: Box::new(ErrorImpl { code, line, column }),
+         }
+diff --git a/src/lib.rs b/src/lib.rs
+index 183a91b..c30eb61 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -368,6 +368,7 @@
+ #![no_std]
+ #![cfg_attr(docsrs, feature(doc_cfg))]
+ #![allow(unknown_lints, mismatched_lifetime_syntaxes)]
++#![feature(io_const_error)]
+ 
+ #[cfg(not(any(feature = "std", feature = "alloc")))]
+ compile_error! {
+@@ -397,7 +398,7 @@ pub use crate::de::{from_slice, from_str, Deserializer, StreamDeserializer};
+ #[doc(inline)]
+ pub use crate::error::{Error, Result};
+ #[doc(inline)]
+-pub use crate::ser::{to_string, to_string_pretty, to_vec, to_vec_pretty};
++pub use crate::ser::{format_escaped_str_contents, to_string, to_string_pretty, to_vec, to_vec_pretty};
+ #[cfg(feature = "std")]
+ #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
+ #[doc(inline)]
+diff --git a/src/map.rs b/src/map.rs
+index f91e70b..2f188bd 100644
+--- a/src/map.rs
++++ b/src/map.rs
+@@ -380,6 +380,28 @@ impl Map<String, Value> {
+         #[cfg(feature = "preserve_order")]
+         self.map.sort_unstable_keys();
+     }
++
++    pub fn into_inner(self) -> MapImpl<String, Value> {
++        self.map
++    }
++}
++
++impl AsRef<MapImpl<String, Value>> for Map<String, Value> {
++    fn as_ref(&self) -> &MapImpl<String, Value> {
++        &self.map
++    }
++}
++
++impl AsMut<MapImpl<String, Value>> for Map<String, Value> {
++    fn as_mut(&mut self) -> &mut MapImpl<String, Value> {
++        &mut self.map
++    }
++}
++
++impl From<MapImpl<String, Value>> for Map<String, Value> {
++    fn from(map: MapImpl<String, Value>) -> Self {
++        Map { map }
++    }
+ }
+ 
+ #[allow(clippy::derivable_impls)] // clippy bug: https://github.com/rust-lang/rust-clippy/issues/7655
+diff --git a/src/ser.rs b/src/ser.rs
+index 053f95a..224c035 100644
+--- a/src/ser.rs
++++ b/src/ser.rs
+@@ -53,6 +53,11 @@ where
+         Serializer { writer, formatter }
+     }
+ 
++    #[inline]
++    pub fn as_inner(&mut self) -> (&mut W, &mut F) {
++        (&mut self.writer, &mut self.formatter)
++    }
++
+     /// Unwrap the `Writer` from the `Serializer`.
+     #[inline]
+     pub fn into_inner(self) -> W {
+@@ -2076,7 +2081,7 @@ where
+     formatter.end_string(writer)
+ }
+ 
+-fn format_escaped_str_contents<W, F>(
++pub fn format_escaped_str_contents<W, F>(
+     writer: &mut W,
+     formatter: &mut F,
+     value: &str,
+diff --git a/src/value/mod.rs b/src/value/mod.rs
+index 7c562f8..1eeafd6 100644
+--- a/src/value/mod.rs
++++ b/src/value/mod.rs
+@@ -238,10 +238,17 @@ impl Display for Value {
+             }
+         }
+ 
+-        fn io_error(_: fmt::Error) -> io::Error {
++        const fn io_error(_: fmt::Error) -> io::Error {
+             // Error value does not matter because Display impl just maps it
+             // back to fmt::Error.
+-            io::Error::new(io::ErrorKind::Other, "fmt error")
++            #[cfg(feature = "std")]
++            const {
++                std::io::const_error!(io::ErrorKind::Other, "fmt error")
++            }
++            #[cfg(not(feature = "std"))]
++            const {
++                io::Error
++            }
+         }
+ 
+         let alternate = f.alternate();
+diff --git a/tests/test.rs b/tests/test.rs
+index f371f6f..3804629 100644
+--- a/tests/test.rs
++++ b/tests/test.rs
+@@ -2193,7 +2193,7 @@ struct FailReader(io::ErrorKind);
+ 
+ impl io::Read for FailReader {
+     fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+-        Err(io::Error::new(self.0, "oh no!"))
++        Err(io::const_error!(self.0, "oh no!"))
+     }
+ }
+ 

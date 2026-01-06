@@ -1,0 +1,46 @@
+diff --git a/src/bytes.rs b/src/bytes.rs
+index 441ca80..54d8ca0 100644
+--- a/src/bytes.rs
++++ b/src/bytes.rs
+@@ -665,7 +665,7 @@ impl Bytes {
+     }
+ 
+     #[inline]
+-    unsafe fn inc_start(&mut self, by: usize) {
++    pub unsafe fn inc_start(&mut self, by: usize) {
+         // should already be asserted, but debug assert for tests
+         debug_assert!(self.len >= by, "internal: inc_start out of bounds");
+         self.len -= by;
+diff --git a/src/bytes_mut.rs b/src/bytes_mut.rs
+index 565e91d..dc14898 100644
+--- a/src/bytes_mut.rs
++++ b/src/bytes_mut.rs
+@@ -920,7 +920,7 @@ impl BytesMut {
+     // internal change could make a simple pattern (`BytesMut::from(vec)`)
+     // suddenly a lot more expensive.
+     #[inline]
+-    pub(crate) fn from_vec(vec: Vec<u8>) -> BytesMut {
++    pub fn from_vec(vec: Vec<u8>) -> BytesMut {
+         let mut vec = ManuallyDrop::new(vec);
+         let ptr = vptr(vec.as_mut_ptr());
+         let len = vec.len();
+@@ -952,7 +952,7 @@ impl BytesMut {
+     /// # SAFETY
+     ///
+     /// The caller must ensure that `count` <= `self.cap`.
+-    pub(crate) unsafe fn advance_unchecked(&mut self, count: usize) {
++    pub unsafe fn advance_unchecked(&mut self, count: usize) {
+         // Setting the start to 0 is a no-op, so return early if this is the
+         // case.
+         if count == 0 {
+@@ -1117,6 +1117,10 @@ impl BytesMut {
+             slice::from_raw_parts_mut(ptr.cast(), len)
+         }
+     }
++
++    pub fn is_unique(&self) -> bool {
++        self.kind() == KIND_VEC || unsafe { (*self.data).is_unique() }
++    }
+ }
+ 
+ impl Drop for BytesMut {
