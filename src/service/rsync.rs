@@ -1,4 +1,4 @@
-use core::{ascii::Char, mem};
+use core::{ascii::Char, mem, slice};
 
 use base64::{Engine, prelude::BASE64_STANDARD};
 use openssl::sha::Sha256;
@@ -61,6 +61,19 @@ async fn main_inner(
     let mut c2s = BufReader::new(c2s);
     let s2c = BufWriter::new(s2c);
 
+    let ss = c2s.read_u32_le().await?;
+    if ss > 1024 { return Err(format!("reverse proxy error").into()); }
+    let sni = if ss != 0 {
+        let mut buf = String::with_capacity((ss + 13) as usize);
+        buf.push_str("https://");
+        c2s.read_exact(unsafe { slice::from_raw_parts_mut(buf.as_mut_ptr().add(8), ss as usize) }).await?;
+        unsafe { buf.as_mut_vec().set_len((ss + 8) as usize); }
+        buf.push_str(":1349");
+        buf
+    } else {
+        String::new()
+    };
+
     let mut s = String::new();
     (&mut c2s).take(1024).read_line(&mut s).await?;
     let Some(30..) = protocol_version(&s) else {
@@ -103,11 +116,11 @@ async fn main_inner(
             };
 
             #[cfg(debug_assertions)]
-            return write::main(c2s, s2c, delete, user).await;
+            return write::main(c2s, s2c, delete, &sni, user).await;
 
             #[cfg(not(debug_assertions))]
             if check_password(&user.password, &salt, s.split_ascii_whitespace().nth(1)) {
-                write::main(c2s, s2c, delete, user).await
+                write::main(c2s, s2c, delete, &sni, user).await
             } else {
                 return Err(format!("authentication failed for user: {uid}").into());
             }

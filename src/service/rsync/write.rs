@@ -190,7 +190,8 @@ fn do_delete(
         if type_.is_dir() {
             let fd = unsafe { libc::openat(dir, name.as_encoded_bytes().as_ptr().cast(), libc::O_DIRECTORY) };
             if fd == -1 { return Err(io::Error::last_os_error()); }
-            let sub_alived = do_delete(cwd, exempt, fd, &mut readdir_from_rawfd(fd)?)?.1;
+            let (sub_delcnt, sub_alived) = do_delete(cwd, exempt, fd, &mut readdir_from_rawfd(fd)?)?;
+            delcnt += sub_delcnt;
             if sub_alived {
                 alived = true;
             } else {
@@ -301,6 +302,7 @@ pub async fn main(
     mut c2s: BufReader<OwnedReadHalf>,
     mut s2c: BufWriter<OwnedWriteHalf>,
     delete: bool,
+    sni: &str,
     user: User,
 ) -> Result<(), BoxedStdError> {
     let mut l = 0u8;
@@ -399,7 +401,7 @@ pub async fn main(
         } else {
             Arguments::from_str("")
         };
-        format!("======== {tot}/{exp_tot} file(s) received{dl}. Go to https://localhost:1349/lean/{}/ for further check. ========\n", user.uid)
+        format!("======== {tot}/{exp_tot} file(s) received{dl}. Go to {sni}/lean/{}/ for further check. ========\n", user.uid)
     };
     let flag = s.len() as u32 | 0x0a00_0000;
     s2c.write_u32_le(flag).await?;
