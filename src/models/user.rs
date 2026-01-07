@@ -122,3 +122,14 @@ pub struct UserA {
     #[serde(rename = "isAdmin")]
     pub is_admin: bool,
 }
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserAOE {
+    #[serde(flatten)]
+    pub user: User,
+    pub is_admin: bool,
+    pub is_problem_admin: bool,
+    pub is_contest_admin: bool,
+    pub is_discussion_admin: bool,
+}

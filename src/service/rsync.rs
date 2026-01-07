@@ -76,10 +76,15 @@ async fn main_inner(
     (&mut c2s).take(1024).read_line(&mut s).await?;
 
     let mut mode = Mode::Write;
+    let mut delete = false;
     loop {
         let s = unsafe { &*c2s.read_possible_line::<0, 10>().await? };
         if s == b"--sender" {
             mode = Mode::Read;
+        }
+        if s.starts_with(b"--delete")
+        && (s.len() == 8 || unsafe { *s.get_unchecked(8) } == b'-') {
+            delete = true;
         }
         if s.is_empty() {
             break;
@@ -98,11 +103,11 @@ async fn main_inner(
             };
 
             #[cfg(debug_assertions)]
-            return write::main(c2s, s2c, user).await;
+            return write::main(c2s, s2c, delete, user).await;
 
             #[cfg(not(debug_assertions))]
             if check_password(&user.password, &salt, s.split_ascii_whitespace().nth(1)) {
-                write::main(c2s, s2c, user).await
+                write::main(c2s, s2c, delete, user).await
             } else {
                 return Err(format!("authentication failed for user: {uid}").into());
             }

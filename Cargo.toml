@@ -3,7 +3,7 @@ cargo-features = ["unstable-editions"]
 [package]
 name = "lean4oj_backend"
 version = "0.1.0"
-edition = "2024"
+edition = "future"
 
 [dependencies]
 axum = { version = "0.8.8", features = ["ws"] }

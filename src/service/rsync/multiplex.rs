@@ -22,7 +22,9 @@ where
             }
         }
     };
-    tracing::warn!(target: "lean4rsync-multiplex", "multiplex error: {e}");
+    if e.kind() != std::io::ErrorKind::UnexpectedEof {
+        tracing::warn!(target: "lean4rsync-multiplex", "multiplex error: {e}");
+    }
     let s = handler.iter_mut().filter_map(Option::as_mut).map(AsyncWriteExt::shutdown);
     join_all(s).await;
 }

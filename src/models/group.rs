@@ -93,20 +93,19 @@ impl GroupA {
 
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AUV {
-    #[serde(rename = "userMeta")]
-    pub user: User,
-    #[serde(rename = "isGroupAdmin")]
-    pub is_admin: bool,
+    pub user_meta: User,
+    pub is_group_admin: bool,
 }
 
 impl TryFrom<Row> for AUV {
     type Error = DBError;
 
     fn try_from(row: Row) -> Result<Self, Self::Error> {
-        let user = row.clone().try_into()?;
-        let is_admin = row.try_get(9)?;
-        Ok(Self { user, is_admin })
+        let user_meta = row.clone().try_into()?;
+        let is_group_admin = row.try_get(9)?;
+        Ok(Self { user_meta, is_group_admin })
     }
 }
 

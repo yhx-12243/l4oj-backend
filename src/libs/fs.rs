@@ -38,17 +38,13 @@ pub async fn is_read_forbidden(path: &str, session: Option<Session<GlobalStore>>
         return false;
     }
 
-    let Some(session) = session else { return true };
-    let Ok(Some(Value::String(uid))) = session.get_value("uid").await else { return true };
-    if is_his_module(path, &uid) {
-        return false;
-    }
-
     let Ok(mut conn) = get_connection().await else { return true };
-    let Ok(Some(user)) = User::by_uid(&uid, &mut conn).await else { return true };
-    // check whether user has permission to view that module.
+    let Ok(Some(user)) = User::from_maybe_session(&session, &mut conn).await else { return true };
 
-    true
+    !(
+        is_his_module(path, &user.uid) ||
+        matches!(privilege::check(&user.uid, "Lean4OJ.Admin", &mut conn).await, Ok(true))
+    )
 }
 
 }

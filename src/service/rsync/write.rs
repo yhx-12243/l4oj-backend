@@ -1,15 +1,23 @@
 use core::{
+    fmt::Arguments,
+    index::Last,
     mem::{DropGuard, MaybeUninit},
     ptr, slice,
     str::pattern::Pattern,
 };
 use std::{
-    fs, io,
-    os::fd::{AsRawFd, RawFd},
-    path::Path,
+    fs::ReadDir,
+    io,
+    os::{
+        fd::{AsRawFd, RawFd},
+        unix::fs::DirEntryExt2,
+    },
+    path::PathBuf,
     str::pattern::Searcher,
+    sync::Arc,
 };
 
+use hashbrown::HashSet;
 use tempfile::Builder;
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader, BufWriter, simplex},
@@ -52,7 +60,7 @@ fn check_suffix(suffix: &str) -> bool {
 fn check_path(path: &[u8], uid_with_slash: &str) -> usize {
     let uid_with_trailing_slash = unsafe { uid_with_slash.as_bytes().get_unchecked(1..) };
     if path.starts_with(uid_with_trailing_slash) {
-        let t = uid_with_trailing_slash.len();
+        let t = uid_with_trailing_slash.len(); // t > 0.
         let suffix = unsafe { path.get_unchecked(t..) };
         if let Some(suffix) = str::from_utf8(suffix).ok()
         && check_suffix(suffix) {
@@ -62,7 +70,7 @@ fn check_path(path: &[u8], uid_with_slash: &str) -> usize {
         }
     } else {
         let mut ss = uid_with_slash.into_searcher(unsafe { str::from_utf8_unchecked(path) });
-        let Some((s, t)) = ss.next_match() else { return 0 };
+        let Some((s, t)) = ss.next_match() else { return 0 }; // t > 0.
         let prefix = unsafe { path.get_unchecked(..s) };
         let suffix = unsafe { path.get_unchecked(t..) };
         if check_prefix(prefix)
@@ -152,10 +160,64 @@ where
     }
 }
 
-async fn receive<R>(mut rx: R, fl: &mut [FileEntry], dir: RawFd) -> Result<(), BoxedStdError>
+/// Just Cthulhu.
+#[allow(clippy::arc_with_non_send_sync, clippy::transmute_undefined_repr)]
+fn readdir_from_rawfd(fd: RawFd) -> io::Result<ReadDir> {
+    let ptr = unsafe { libc::fdopendir(fd) };
+    if ptr.is_null() { return Err(io::Error::last_os_error()); }
+    Ok(unsafe {
+        core::mem::transmute::<[Option<Arc<[*mut libc::DIR; 4]>>; 2], ReadDir>([
+            Some(Arc::new([ptr::null_mut(), ptr::null_mut(), ptr::null_mut(), ptr])),
+            None,
+        ])
+    })
+}
+
+fn do_delete(
+    cwd: &mut PathBuf,
+    exempt: &HashSet<&[u8]>,
+    dir: RawFd,
+    readdir: &mut ReadDir,
+) -> io::Result<(usize, bool)> {
+    let mut delcnt = 0;
+    let mut alived = false;
+    let base_len = cwd.as_os_str().len();
+    for entry in readdir {
+        let entry = entry?;
+        let name = entry.file_name_ref();
+        let type_ = entry.file_type()?;
+        cwd.push(name);
+        if type_.is_dir() {
+            let fd = unsafe { libc::openat(dir, name.as_encoded_bytes().as_ptr().cast(), libc::O_DIRECTORY) };
+            if fd == -1 { return Err(io::Error::last_os_error()); }
+            let sub_alived = do_delete(cwd, exempt, fd, &mut readdir_from_rawfd(fd)?)?.1;
+            if sub_alived {
+                alived = true;
+            } else {
+                if unsafe { libc::unlinkat(dir, name.as_encoded_bytes().as_ptr().cast(), libc::AT_REMOVEDIR) } != 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                delcnt += 1;
+            }
+        } else if exempt.contains(cwd.as_os_str().as_encoded_bytes()) {
+            alived = true;
+        } else {
+            if unsafe { libc::unlinkat(dir, name.as_encoded_bytes().as_ptr().cast(), 0) } != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            delcnt += 1;
+        }
+        cwd.as_mut_os_string().truncate(base_len);
+    }
+
+    Ok((delcnt, alived))
+}
+
+async fn receive<R>(mut rx: R, fl: &mut [FileEntry], dir: RawFd) -> Result<usize, BoxedStdError>
 where
     R: AsyncRead + Unpin,
 {
+    let mut n = 0;
     let mut state = Jumping::default();
     let mut buf = [MaybeUninit::<u8>::uninit(); 24];
     let buf18 = unsafe { slice::from_raw_parts_mut(buf.as_mut_ptr().cast(), 18) };
@@ -164,7 +226,7 @@ where
     loop {
         let idx = match state.recv(&mut rx).await {
             Ok(i) => i,
-            Err(e) if e.raw_os_error() == Some(1349) => return Ok(()),
+            Err(e) if e.raw_os_error() == Some(1349) => return Ok(n),
             Err(e) => return Err(e.into()),
         };
         let Some(entry) = fl.get_mut(idx as usize) else {
@@ -231,12 +293,14 @@ where
             }
         }
         rx.read_exact(buf20).await?;
+        n += 1;
     }
 }
 
 pub async fn main(
     mut c2s: BufReader<OwnedReadHalf>,
     mut s2c: BufWriter<OwnedWriteHalf>,
+    delete: bool,
     user: User,
 ) -> Result<(), BoxedStdError> {
     let mut l = 0u8;
@@ -251,6 +315,10 @@ pub async fn main(
     handler[7] = Some(tx);
     spawn(c2s_multiplex(c2s, handler));
 
+    if delete && rx.read_u32().await? != 0 {
+        return Err("Do not specify rule explicitly (in deletion mode). Server will filter automatically.".into());
+    }
+
     let limit = {
         let mut conn = get_connection().await?;
         if privilege::check(&user.uid, "Lean4OJ.TooManyOLeans", &mut conn).await? {
@@ -259,24 +327,40 @@ pub async fn main(
             TOTAL_FILE_LIMIT
         }
     };
-    let buf = format!(".internal/lean/{}/", user.uid);
-    let base_dir = Path::new(unsafe { buf.get_unchecked(0..buf.len() - 1) });
-    let uid_with_slash = unsafe { buf.get_unchecked(14..) };
-    let mut fl = generate_file_list(&mut rx, uid_with_slash, limit).await?;
+    let mut buf = format!(".internal/lean/{}/", user.uid);
+    let mut fl = generate_file_list(&mut rx, unsafe { buf.get_unchecked(14..) }, limit).await?;
     fl.sort();
-    if let Err(e) = fs::create_dir(base_dir) && e.raw_os_error() != Some(libc::EEXIST) {
-        return Err(e.into());
+    unsafe { *buf.as_mut_vec().get_unchecked_mut(Last) = 0; }
+    if unsafe { libc::mkdir(buf.as_ptr().cast(), 0o777) } != 0 {
+        let err = io::Error::last_os_error();
+        if err.raw_os_error() != Some(libc::EEXIST) { return Err(err.into()); }
     }
-    let base_dir_fd = fs::File::open(base_dir)?;
+    let base_dir_fd = unsafe { libc::open(buf.as_ptr().cast(), libc::O_DIRECTORY) };
+    if base_dir_fd == -1 { return Err(io::Error::last_os_error().into()); }
+
+    let exempt = if delete {
+        use std::slice::SliceIndex;
+        fl.iter()
+            .filter_map(|entry| (entry.enabled != 0).then_some(
+                unsafe { &*(entry.enabled..).get_unchecked(&raw const *entry.path) }
+            ))
+            .collect::<HashSet<_>>()
+    } else {
+        HashSet::new()
+    };
+
+    // This fd is now managed by 🌰!
+    let mut chestnut = readdir_from_rawfd(base_dir_fd)?;
 
     let mut state = Jumping::default();
     let mut buf = Vec::new();
+    let mut exp_tot = 0;
     for (idx, file) in fl.iter_mut().enumerate() {
         if file.enabled == 0 {
             tracing::debug!(target: "lean4rsync-writer", "\x1b[2mfile ignored: {file:?}\x1b[0m");
             continue;
         }
-        if file.agree(base_dir_fd.as_raw_fd()) {
+        if file.agree(base_dir_fd) {
             tracing::debug!(target: "lean4rsync-writer", "\x1b[32mfile agreed: {file:?}\x1b[0m");
             file.enabled = 0;
             continue;
@@ -295,13 +379,31 @@ pub async fn main(
             s2c.write_all(&buf).await?;
             buf.clear();
         }
+        exp_tot += 1;
     }
     buf.push(0);
     s2c.write_u32_le(buf.len() as u32 | 0x0700_0000).await?;
     s2c.write_all(&buf).await?;
     s2c.flush().await?;
 
-    receive(&mut rx, &mut fl, base_dir_fd.as_raw_fd()).await?;
+    let delcnt = if delete {
+        do_delete(&mut PathBuf::new(), &exempt, base_dir_fd, &mut chestnut)?.0
+    } else {
+        0
+    };
+    let tot = receive(&mut rx, &mut fl, base_dir_fd).await?;
+
+    let s = {
+        let dl = if delcnt != 0 {
+            format_args!(", {delcnt} file(s) purged")
+        } else {
+            Arguments::from_str("")
+        };
+        format!("======== {tot}/{exp_tot} file(s) received{dl}. Go to https://localhost:1349/lean/{}/ for further check. ========\n", user.uid)
+    };
+    let flag = s.len() as u32 | 0x0a00_0000;
+    s2c.write_u32_le(flag).await?;
+    s2c.write_all(s.as_bytes()).await?;
 
     s2c.write_all(b"\x04\0\0\x07\0\0\0\0").await?;
     s2c.flush().await.map_err(Into::into)

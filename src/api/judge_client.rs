@@ -21,8 +21,8 @@ async fn list_judge_clients() -> JkmxJsonResponse {
     let mut buf = r#"{"judgeClients":"#.to_owned();
     let mut ser = JSerializer::new(unsafe { buf.as_mut_vec() });
     let mut seq = ser.serialize_seq(Some(l.len()))?;
-    for AUV { user, .. } in &l {
-        seq.serialize_element(&IdAndName { id: &user.uid, name: &user.username })?;
+    for AUV { user_meta, .. } in &l {
+        seq.serialize_element(&IdAndName { id: &user_meta.uid, name: &user_meta.username })?;
     }
     seq.end()?;
     buf.push_str(r#","hasManagePermission":true}"#);

@@ -94,8 +94,8 @@ impl const Default for ServerVersion {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SessionInfoResponse {
-    server_version: ServerVersion,
     server_preference: PreferenceConfig,
+    server_version: ServerVersion,
     user_meta: Option<UserA>,
     joined_groups_count: Option<u64>,
     user_privileges: privilege::Privileges,

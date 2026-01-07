@@ -46,7 +46,7 @@ impl fmt::Debug for FileEntry {
             "path", &self.path.utf8_chunks().debug(),
             "size", &self.size,
             "sha1", &fmt::from_fn(|fmt| fmt::Display::fmt(&self.sha1.escape_ascii(), fmt)),
-            "enabled", &self.enabled,
+            "enabled_pos", &self.enabled,
             "mode", &fmt::from_fn(|fmt| fmt::Octal::fmt(&self.mode, fmt)),
         )
     }
