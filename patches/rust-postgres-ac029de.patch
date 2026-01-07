@@ -468,7 +468,7 @@ index 1652bec7..8edc1e0f 100644
      }
  }
 diff --git a/tokio-postgres/src/client.rs b/tokio-postgres/src/client.rs
-index 30ddba27..8e6e11db 100644
+index 78e63597..8b95bb18 100644
 --- a/tokio-postgres/src/client.rs
 +++ b/tokio-postgres/src/client.rs
 @@ -19,12 +19,16 @@ use crate::{
@@ -480,7 +480,7 @@ index 30ddba27..8e6e11db 100644
  use parking_lot::Mutex;
  use postgres_protocol::message::backend::Message;
  use postgres_protocol::message::frontend;
- use postgres_types::BorrowToSql;
+ use postgres_types::{BorrowToSql, FromSqlOwned};
 -use std::collections::HashMap;
 +use std::borrow::Cow;
 +use std::collections::hash_map::{
@@ -581,7 +581,7 @@ index 30ddba27..8e6e11db 100644
      }
  
      /// Executes a statement, returning a vector of the resulting rows.
-@@ -424,12 +464,16 @@ impl Client {
+@@ -486,12 +526,16 @@ impl Client {
      /// # Ok(())
      /// # }
      /// ```
@@ -600,7 +600,7 @@ index 30ddba27..8e6e11db 100644
      }
  
      /// Executes a statement, returning the number of rows modified.
-@@ -442,15 +486,15 @@ impl Client {
+@@ -504,15 +548,15 @@ impl Client {
      /// with the `prepare` method.
      ///
      /// If the statement does not modify any rows (e.g. `SELECT`), 0 is returned.
@@ -619,7 +619,7 @@ index 30ddba27..8e6e11db 100644
      }
  
      /// The maximally flexible version of [`execute`].
-@@ -511,8 +555,14 @@ impl Client {
+@@ -573,8 +617,14 @@ impl Client {
      /// Prepared statements should be use for any query which contains user-specified data, as they provided the
      /// functionality to safely embed that data in the request. Do not form statements via string concatenation and pass
      /// them to this method!
@@ -636,7 +636,7 @@ index 30ddba27..8e6e11db 100644
      }
  
      /// Executes a sequence of SQL statements using the simple query protocol, returning the resulting rows as a stream.
-@@ -528,8 +578,8 @@ impl Client {
+@@ -590,8 +640,8 @@ impl Client {
      /// Prepared statements should be use for any query which contains user-specified data, as they provided the
      /// functionality to safely embed that data in the request. Do not form statements via string concatenation and pass
      /// them to this method!
@@ -647,7 +647,7 @@ index 30ddba27..8e6e11db 100644
      }
  
      /// Executes a sequence of SQL statements using the simple query protocol.
-@@ -542,21 +592,21 @@ impl Client {
+@@ -604,21 +654,21 @@ impl Client {
      /// Prepared statements should be use for any query which contains user-specified data, as they provided the
      /// functionality to safely embed that data in the request. Do not form statements via string concatenation and pass
      /// them to this method!
@@ -803,7 +803,7 @@ index b3d1a213..ee5b9741 100644
  }
  
 diff --git a/tokio-postgres/src/error/mod.rs b/tokio-postgres/src/error/mod.rs
-index 2a975eb2..7be5bebf 100644
+index a5fc9607..bcba9bb8 100644
 --- a/tokio-postgres/src/error/mod.rs
 +++ b/tokio-postgres/src/error/mod.rs
 @@ -116,7 +116,7 @@ impl DbError {
@@ -876,7 +876,7 @@ index 2a975eb2..7be5bebf 100644
      Io,
      UnexpectedMessage,
      Tls,
-@@ -434,7 +434,7 @@ impl Error {
+@@ -436,7 +436,7 @@ impl Error {
          self.as_db_error().map(DbError::code)
      }
  
@@ -1412,27 +1412,27 @@ index 1696ab23..2aa2796d 100644
  
      let buf = encode(client, query)?;
 diff --git a/tokio-postgres/src/to_statement.rs b/tokio-postgres/src/to_statement.rs
-index 7e129927..c6234737 100644
+index 8c6ccdcd..e18cbe72 100644
 --- a/tokio-postgres/src/to_statement.rs
 +++ b/tokio-postgres/src/to_statement.rs
-@@ -12,10 +12,12 @@ mod private {
+@@ -14,10 +14,12 @@ mod private {
      }
  
      impl ToStatementType<'_> {
--        pub async fn into_statement(self, client: &Client) -> Result<Statement, Error> {
-+        pub fn into_statement(self, client: &Client) -> impl Future<Output = Result<Statement, Error>> {
+-        pub async fn into_statement(self, client: &Arc<InnerClient>) -> Result<Statement, Error> {
++        pub fn into_statement(self, client: &Arc<InnerClient>) -> impl Future<Output = Result<Statement, Error>> {
 +            use futures_util::FutureExt;
 +
              match self {
 -                ToStatementType::Statement(s) => Ok(s.clone()),
--                ToStatementType::Query(s) => client.prepare(s).await,
+-                ToStatementType::Query(s) => prepare::prepare(client, s, &[]).await,
 +                ToStatementType::Statement(s) => core::future::ready(Ok(s.clone())).left_future(),
-+                ToStatementType::Query(s) => client.prepare(s).right_future(),
++                ToStatementType::Query(s) => prepare::prepare(client, s, &[]).right_future(),
              }
          }
      }
 diff --git a/tokio-postgres/src/transaction.rs b/tokio-postgres/src/transaction.rs
-index 0186da06..d751a07f 100644
+index 2d7785e1..65a7a592 100644
 --- a/tokio-postgres/src/transaction.rs
 +++ b/tokio-postgres/src/transaction.rs
 @@ -11,7 +11,7 @@ use crate::{
@@ -1607,7 +1607,7 @@ index 0186da06..d751a07f 100644
      }
  
      /// A maximally flexible version of [`bind`].
-@@ -213,49 +225,52 @@ impl<'a> Transaction<'a> {
+@@ -216,49 +228,52 @@ impl<'a> Transaction<'a> {
      ///
      /// Unlike `query`, portals can be incrementally evaluated by limiting the number of rows returned in each call to
      /// `query_portal`. If the requested number is negative or 0, all rows will be returned.
@@ -1679,7 +1679,7 @@ index 0186da06..d751a07f 100644
      }
  
      /// Like `Client::cancel_token`.
-@@ -266,36 +281,40 @@ impl<'a> Transaction<'a> {
+@@ -269,36 +284,40 @@ impl<'a> Transaction<'a> {
      /// Like `Client::cancel_query`.
      #[cfg(feature = "runtime")]
      #[deprecated(since = "0.6.0", note = "use Transaction::cancel_token() instead")]

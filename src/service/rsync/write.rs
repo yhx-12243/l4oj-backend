@@ -6,7 +6,7 @@ use core::{
 use std::{
     fs, io,
     os::fd::{AsRawFd, RawFd},
-    path::PathBuf,
+    path::Path,
     str::pattern::Searcher,
 };
 
@@ -21,7 +21,14 @@ use super::{
     file_entry::FileEntry, io::ReadVarintRsync, jumping::Jumping, multiplex::c2s_multiplex,
 };
 use crate::{
-    libs::{error::BoxedStdError, fs::{mkdir, unmap_send}, olean::lean_version, validate::is_lean_id},
+    libs::{
+        db::get_connection,
+        error::BoxedStdError,
+        fs::{mkdir, unmap_send},
+        olean::lean_version,
+        privilege,
+        validate::is_lean_id,
+    },
     models::user::User,
 };
 
@@ -30,7 +37,7 @@ const TOTAL_FILE_LIMIT: usize = 0x4000_0000; // 1 GB
 const TOTAL_FILE_NUM: usize = 0x10_0000; // 1 M
 
 fn check_prefix(prefix: &[u8]) -> bool {
-    const B: &[u8] = b"/.lake/build/lib/lean/";
+    const B: &[u8] = b"/.lake/build/lib/lean";
     if prefix.len() <= B.len() { B.ends_with(prefix) } else { prefix.ends_with(B) }
 }
 
@@ -38,27 +45,37 @@ fn check_suffix(suffix: &str) -> bool {
     let b = if let Some(a) = suffix.strip_suffix(".server") { a }
     else if let Some(a) = suffix.strip_suffix(".private") { a }
     else { suffix };
-    let Some(c) = b.strip_suffix(".olean") else { return false };
-    if c.is_empty() { return false }
-    let mut it = c.split('/');
-    it.next() == Some("") && it.all(is_lean_id)
+    b.strip_suffix(".olean").is_some_and(|c| c.split('/').all(is_lean_id))
+    // Force `Name.needsNoEscape`, prevent the outrageous case like `import «foo.olean».bar`.
 }
 
-fn check_path(path: &[u8], uid: &str) -> usize {
-    let mut ss = uid.into_searcher(unsafe { str::from_utf8_unchecked(path) });
-    let Some((s, t)) = ss.next_match() else { return 0 };
-    let prefix = unsafe { path.get_unchecked(..s) };
-    let suffix = unsafe { path.get_unchecked(t..) };
-    if check_prefix(prefix)
-    && let Some(suffix) = str::from_utf8(suffix).ok()
-    && check_suffix(suffix) {
-        t + 1
+fn check_path(path: &[u8], uid_with_slash: &str) -> usize {
+    let uid_with_trailing_slash = unsafe { uid_with_slash.as_bytes().get_unchecked(1..) };
+    if path.starts_with(uid_with_trailing_slash) {
+        let t = uid_with_trailing_slash.len();
+        let suffix = unsafe { path.get_unchecked(t..) };
+        if let Some(suffix) = str::from_utf8(suffix).ok()
+        && check_suffix(suffix) {
+            t
+        } else {
+            0
+        }
     } else {
-        0
+        let mut ss = uid_with_slash.into_searcher(unsafe { str::from_utf8_unchecked(path) });
+        let Some((s, t)) = ss.next_match() else { return 0 };
+        let prefix = unsafe { path.get_unchecked(..s) };
+        let suffix = unsafe { path.get_unchecked(t..) };
+        if check_prefix(prefix)
+        && let Some(suffix) = str::from_utf8(suffix).ok()
+        && check_suffix(suffix) {
+            t
+        } else {
+            0
+        }
     }
 }
 
-async fn generate_file_list<R>(mut rx: R, uid: &str, limit: usize) -> Result<Vec<FileEntry>, BoxedStdError>
+async fn generate_file_list<R>(mut rx: R, uid_with_slash: &str, limit: usize) -> Result<Vec<FileEntry>, BoxedStdError>
 where
     R: AsyncRead + Unpin,
 {
@@ -112,7 +129,7 @@ where
             | libc::S_IFREG => {
                 rx.read_exact(&mut sha1).await?;
                 if size as usize <= SINGLE_FILE_LIMIT {
-                    enabled = check_path(&s, uid);
+                    enabled = check_path(&s, uid_with_slash);
                     if enabled != 0 {
                         acc += size as usize;
                         if acc > limit {
@@ -234,14 +251,23 @@ pub async fn main(
     handler[7] = Some(tx);
     spawn(c2s_multiplex(c2s, handler));
 
-    // TODO: release limit to usize::MAX for VIP users.
-    let mut fl = generate_file_list(&mut rx, &user.uid, TOTAL_FILE_LIMIT).await?;
+    let limit = {
+        let mut conn = get_connection().await?;
+        if privilege::check(&user.uid, "Lean4OJ.TooManyOLeans", &mut conn).await? {
+            usize::MAX
+        } else {
+            TOTAL_FILE_LIMIT
+        }
+    };
+    let buf = format!(".internal/lean/{}/", user.uid);
+    let base_dir = Path::new(unsafe { buf.get_unchecked(0..buf.len() - 1) });
+    let uid_with_slash = unsafe { buf.get_unchecked(14..) };
+    let mut fl = generate_file_list(&mut rx, uid_with_slash, limit).await?;
     fl.sort();
-    let base_dir = PathBuf::from(format!(".internal/lean/{}", user.uid));
-    if let Err(e) = fs::create_dir(&*base_dir) && e.raw_os_error() != Some(libc::EEXIST) {
+    if let Err(e) = fs::create_dir(base_dir) && e.raw_os_error() != Some(libc::EEXIST) {
         return Err(e.into());
     }
-    let base_dir_fd = fs::File::open(&*base_dir)?;
+    let base_dir_fd = fs::File::open(base_dir)?;
 
     let mut state = Jumping::default();
     let mut buf = Vec::new();

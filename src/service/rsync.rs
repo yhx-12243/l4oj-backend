@@ -12,6 +12,7 @@ use tokio::{
 
 use crate::{
     libs::{
+        constants::PASSWORD_LENGTH,
         db::get_connection,
         error::{BoxedStdError, serialize_err},
         util::gen_random_ascii,
@@ -36,8 +37,8 @@ fn protocol_version(s: &str) -> Option<u32> {
 }
 
 #[inline]
-fn check_password(password: &[u8; 43], salt: &[Char; 16], response: Option<&str>) -> bool {
-    let found = if let Some(a) = response && let Some(b) = a.as_bytes().as_array::<43>() {
+fn check_password(password: &[u8; PASSWORD_LENGTH], salt: &[Char; 16], response: Option<&str>) -> bool {
+    let found = if let Some(a) = response && let Some(b) = a.as_bytes().as_array::<PASSWORD_LENGTH>() {
         b
     } else {
         return false;
@@ -46,7 +47,7 @@ fn check_password(password: &[u8; 43], salt: &[Char; 16], response: Option<&str>
     sha256.update(password);
     sha256.update(salt.as_bytes());
     let hash = sha256.finish();
-    let mut b64hash = [0u8; 43];
+    let mut b64hash = [0u8; PASSWORD_LENGTH];
     BASE64_STANDARD.internal_encode(&hash, &mut b64hash);
     b64hash == *found
 }

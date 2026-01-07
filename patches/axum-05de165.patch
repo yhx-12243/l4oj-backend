@@ -1,5 +1,5 @@
 diff --git a/axum-core/Cargo.toml b/axum-core/Cargo.toml
-index f3f31e3c..64370e06 100644
+index 1ae67eee..0507d1f2 100644
 --- a/axum-core/Cargo.toml
 +++ b/axum-core/Cargo.toml
 @@ -42,7 +42,6 @@ http-body = "1.0.0"
@@ -304,7 +304,7 @@ index 95564823..93ec4428 100644
      type Error = Infallible;
  
 diff --git a/axum/Cargo.toml b/axum/Cargo.toml
-index 13c50357..f2bde6a6 100644
+index 171dc84e..9a5ac710 100644
 --- a/axum/Cargo.toml
 +++ b/axum/Cargo.toml
 @@ -100,13 +100,12 @@ http = "1.0.0"
@@ -840,7 +840,7 @@ index 5eec9c2e..dc976e0a 100644
          serde_path_to_error::deserialize(&mut deserializer)
              .map_err(make_rejection)
 diff --git a/axum/src/lib.rs b/axum/src/lib.rs
-index 866f5eab..6b29fe56 100644
+index 03cd9979..6d6c56b2 100644
 --- a/axum/src/lib.rs
 +++ b/axum/src/lib.rs
 @@ -430,6 +430,7 @@
@@ -1019,7 +1019,7 @@ index cb289219..0872ce1f 100644
  }
  
 diff --git a/axum/src/routing/mod.rs b/axum/src/routing/mod.rs
-index f9978333..ee03ea6f 100644
+index 60babd78..0f8a3cb6 100644
 --- a/axum/src/routing/mod.rs
 +++ b/axum/src/routing/mod.rs
 @@ -432,7 +432,7 @@ where

@@ -1,4 +1,4 @@
-use core::{mem, slice};
+use core::{mem, panic, slice};
 use std::time::SystemTime;
 
 use axum::{
@@ -6,29 +6,63 @@ use axum::{
     body::Body,
     extract::Query,
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{get, post, post_service},
 };
 use base64::{display::Base64Display, prelude::BASE64_STANDARD};
 use bytes::Bytes;
 use compact_str::CompactString;
-use http::{StatusCode, Uri, header};
+use http::{StatusCode, Uri, header, response::Parts};
 use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
 use tower_sessions_core::session::Id;
 
 use crate::{
     bad,
     libs::{
-        auth::{Encoded, Session_},
-        constants::{APPLICATION_JAVASCRIPT_UTF_8, APPLICATION_JSON_UTF_8, BYTES_NULL},
-        db::{BB8Error, DBError, get_connection},
+        auth::{Encoded, Session_, availability},
+        constants::{
+            APPLICATION_JAVASCRIPT_UTF_8, APPLICATION_JSON_UTF_8, BYTES_NULL, PASSWORD_LENGTH,
+        },
+        db::{DBError, JsonChecked, get_connection},
         preference::server::PreferenceConfig,
-        request::{JsonReqult, Repult},
+        privilege,
+        request::{JsonReqult, RawPayload, Repult},
         response::JkmxJsonResponse,
         session,
         validate::{check_email, check_uid, check_username},
     },
-    models::user::User,
+    models::{
+        group::GroupA,
+        user::{User, UserA},
+    },
 };
+
+mod private {
+    use serde_json::{Serializer as JSerializer, ser::CompactFormatter};
+    use std::io::Write;
+
+    pub(super) trait Δ: serde::Serializer {
+        fn δ(_: &*const [u8], _: Self) -> Result<Self::Ok, Self::Error>;
+    }
+
+    impl<S: serde::Serializer> Δ for S {
+        default fn δ(_: &*const [u8], _: Self) -> Result<Self::Ok, Self::Error> {
+            // Won't be instantiated.
+            unimplemented!("Not implemented intentionally.");
+        }
+    }
+
+    impl Δ for &mut JSerializer<&mut Vec<u8>, CompactFormatter> {
+        fn δ(data: &*const [u8], serializer: Self) -> Result<Self::Ok, Self::Error> {
+            serializer.as_inner().0.write_all(unsafe { &**data }).map_err(serde_json::Error::io)
+        }
+    }
+
+    pub(super) fn err() -> super::JkmxJsonResponse {
+        let err = super::DBError::new(tokio_postgres::error::Kind::RowCount, Some("database insertion error".into()));
+        return super::JkmxJsonResponse::Error(super::StatusCode::INTERNAL_SERVER_ERROR, err.into());
+    }
+}
 
 #[derive(Deserialize)]
 struct SessionInfoRequest {
@@ -39,14 +73,20 @@ struct SessionInfoRequest {
 #[derive(Serialize)]
 struct ServerVersion {
     hash: &'static str,
-    date: &'static str,
+    date: u64,
 }
 
 impl const Default for ServerVersion {
     fn default() -> Self {
         Self {
             hash: env!("SERVER_VERSION_HASH"),
-            date: env!("SERVER_VERSION_DATE"),
+            date: const {
+                if let Ok(date) = u64::from_str_radix(env!("SERVER_VERSION_DATE"), 10) {
+                    date * 1000
+                } else {
+                    panic!("Invalid SERVER_VERSION_DATE");
+                }
+            },
         }
     }
 }
@@ -56,15 +96,20 @@ impl const Default for ServerVersion {
 struct SessionInfoResponse {
     server_version: ServerVersion,
     server_preference: PreferenceConfig,
-    user_meta: Option<User>,
-    // joinedGroupsCount: Option<_>,
-    // userPrivileges: Option<_>,
-    // userPreference: Option<_>,
+    user_meta: Option<UserA>,
+    joined_groups_count: Option<u64>,
+    user_privileges: privilege::Privileges,
+    #[serde(serialize_with = "private::Δ::δ")]
+    user_preference: *const [u8],
 }
+
+unsafe impl Send for SessionInfoResponse {}
 
 async fn get_session_info(req: Repult<Query<SessionInfoRequest>>) -> Response {
     const JSONP_HEAD: &str = "(globalThis.getSessionInfoCallback??(e=>globalThis.sessionInfo=e))(";
     const JSONP_TRAIL: &str = ");";
+    const SQL_GET_PREF: &str = "select preference from lean4oj.user_preference where uid = $1";
+    const EMPTY: &[u8] = b"{}";
 
     fn not_falsy(inner: CompactString) -> bool {
         !["false", "f", "no", "n", "off", "0"]
@@ -82,6 +127,9 @@ async fn get_session_info(req: Repult<Query<SessionInfoRequest>>) -> Response {
         server_version: const { ServerVersion::default() },
         server_preference: const { PreferenceConfig::default() },
         user_meta: None,
+        joined_groups_count: None,
+        user_privileges: SmallVec::new(),
+        user_preference: core::ptr::from_ref(EMPTY),
     };
 
     if let Some(token) = token
@@ -89,8 +137,15 @@ async fn get_session_info(req: Repult<Query<SessionInfoRequest>>) -> Response {
     && encoded.verify()
     && let Ok(session) = session::load(encoded.id).await
     && let Ok(mut conn) = get_connection().await
-    && let Ok(user) = User::from_session(&session, &mut conn).await {
-        res.user_meta = user;
+    && let Ok(Some(user)) = User::from_session(&session, &mut conn).await {
+        res.joined_groups_count = GroupA::count(&user.uid, &mut conn).await.ok();
+        res.user_privileges = privilege::all(&user.uid, &mut conn).await.unwrap_or_default();
+        if let Ok(stmt) = conn.prepare_static(SQL_GET_PREF.into()).await
+        && let Ok(row) = conn.query_one(&stmt, &[&&*user.uid]).await
+        && let Ok(pref) = row.try_get::<_, JsonChecked>(0) {
+            res.user_preference = pref.0;
+        }
+        res.user_meta = Some(UserA { user, is_admin: privilege::is_admin(&res.user_privileges) });
     }
 
     let mut body = if jsonp { JSONP_HEAD.to_owned() } else { String::new() };
@@ -103,41 +158,6 @@ async fn get_session_info(req: Repult<Query<SessionInfoRequest>>) -> Response {
         if jsonp { APPLICATION_JAVASCRIPT_UTF_8 } else { APPLICATION_JSON_UTF_8 },
     );
     res
-}
-
-async fn check_identifier_availability(id: &str) -> Result<bool, BB8Error> {
-    const SQL: &str = "select 1 from lean4oj.users where uid = $1";
-
-    let mut conn = get_connection().await?;
-    let stmt = conn.prepare_static(SQL.into()).await?;
-    Ok(conn.query_opt(&stmt, &[&id]).await?.is_none())
-}
-
-async fn check_email_availability(email: &str) -> Result<bool, BB8Error> {
-    const SQL: &str = "select 1 from lean4oj.users where email = $1";
-
-    let mut conn = get_connection().await?;
-    let stmt = conn.prepare_static(SQL.into()).await?;
-    Ok(conn.query_opt(&stmt, &[&email]).await?.is_none())
-}
-
-async fn check_availability(req: Uri) -> JkmxJsonResponse {
-    let Some(query) = req.query() else { return JkmxJsonResponse::Response(StatusCode::OK, BYTES_NULL) };
-
-    let res = match form_urlencoded::parse(query.as_bytes()).next() {
-        Some((deref!("username"), _)) => const { Bytes::from_static(br#"{"usernameAvailable":true}"#) },
-        Some((deref!("identifier"), id)) => {
-            let a = check_identifier_availability(&id).await?;
-            format!(r#"{{"identifierAvailable":{a}}}"#).into()
-        }
-        Some((deref!("email"), email)) => {
-            let a = check_email_availability(&email).await?;
-            format!(r#"{{"emailAvailable":{a}}}"#).into()
-        }
-        _ => BYTES_NULL,
-    };
-
-    JkmxJsonResponse::Response(StatusCode::OK, res)
 }
 
 #[derive(Deserialize)]
@@ -184,6 +204,27 @@ async fn logout(Session_(session): Session_) -> JkmxJsonResponse {
     JkmxJsonResponse::Response(StatusCode::OK, BYTES_NULL)
 }
 
+async fn check_availability(req: Uri) -> JkmxJsonResponse {
+    let Some(query) = req.query() else { return JkmxJsonResponse::Response(StatusCode::OK, BYTES_NULL) };
+
+    let res = match form_urlencoded::parse(query.as_bytes()).next() {
+        Some((deref!("username"), _)) => const { Bytes::from_static(br#"{"usernameAvailable":true}"#) },
+        Some((deref!("identifier"), id)) => {
+            let mut conn = get_connection().await?;
+            let a = availability::identifier(&id, &mut conn).await?;
+            format!(r#"{{"identifierAvailable":{a}}}"#).into()
+        }
+        Some((deref!("email"), email)) => {
+            let mut conn = get_connection().await?;
+            let a = availability::email(&email, &mut conn).await?;
+            format!(r#"{{"emailAvailable":{a}}}"#).into()
+        }
+        _ => BYTES_NULL,
+    };
+
+    JkmxJsonResponse::Response(StatusCode::OK, res)
+}
+
 #[derive(Deserialize)]
 struct RegisterRequest {
     username: CompactString,
@@ -196,7 +237,9 @@ async fn register(
     Extension(now): Extension<SystemTime>,
     req: JsonReqult<RegisterRequest>,
 ) -> JkmxJsonResponse {
-    const SQL: &str = "insert into lean4oj.users (uid, username, email, password, register_time) values ($1, $2, $3, $4, $5)";
+    const SQL_USERS: &str = "insert into lean4oj.users (uid, username, email, password, register_time, avatar_info) values ($1, $2, $3::text, $4, $5, 'gravatar:' || $3::text)";
+    const SQL_USER_INFORMATION: &str = "insert into lean4oj.user_information (uid) values ($1)";
+    const SQL_USER_PREFERENCE: &str = "insert into lean4oj.user_preference (uid) values ($1)";
 
     let Json(RegisterRequest {
         username,
@@ -205,20 +248,22 @@ async fn register(
         password,
     }) = req?;
 
-    if !check_username(&username) || !check_uid(&identifier) || check_email(&email).is_none() || password.len() != 43 || !password.is_ascii() {
+    if !check_username(&username) || !check_uid(&identifier) || check_email(&email).is_none() || password.len() != PASSWORD_LENGTH || !password.is_ascii() {
         bad!(BYTES_NULL)
     }
 
     let mut conn = get_connection().await?;
-    let stmt = conn.prepare_static(SQL.into()).await?;
-    let n = conn.execute(
-        &stmt,
-        &[&&*identifier, &&*username, &&*email, &&*password, &now],
-    ).await?;
-    if n != 1 {
-        let err = DBError::new(tokio_postgres::error::Kind::RowCount, Some("database insertion error".into()));
-        return JkmxJsonResponse::Error(StatusCode::INTERNAL_SERVER_ERROR, err.into());
-    }
+    let stmt_users = conn.prepare_static(SQL_USERS.into()).await?;
+    let stmt_user_information = conn.prepare_static(SQL_USER_INFORMATION.into()).await?;
+    let stmt_user_preference = conn.prepare_static(SQL_USER_PREFERENCE.into()).await?;
+    let txn = conn.transaction().await?;
+    let n = txn.execute(&stmt_users, &[&&*identifier, &&*username, &&*email, &&*password, &now]).await?;
+    if n != 1 { return private::err() }
+    let n = txn.execute(&stmt_user_information, &[&&*identifier]).await?;
+    if n != 1 { return private::err() }
+    let n = txn.execute(&stmt_user_preference, &[&&*identifier]).await?;
+    if n != 1 { return private::err() }
+    txn.commit().await?;
 
     let session = session::create(identifier.into_string()).await?;
     let encoded = Encoded::try_from(session.id().unwrap_or(Id(0)))?;
@@ -227,11 +272,16 @@ async fn register(
     JkmxJsonResponse::Response(StatusCode::OK, res.into())
 }
 
-pub fn router() -> Router {
+const fn list_user_sessions(header: &'static Parts) -> RawPayload {
+    RawPayload { header, body: br#"{"sessions":[]}"# }
+}
+
+pub fn router(header: &'static Parts) -> Router {
     Router::new()
         .route("/getSessionInfo", get(get_session_info))
-        .route("/checkAvailability", get(check_availability))
         .route("/login", post(login))
         .route("/logout", post(logout))
+        .route("/checkAvailability", get(check_availability))
         .route("/register", post(register))
+        .route("/listUserSessions", post_service(list_user_sessions(header)))
 }

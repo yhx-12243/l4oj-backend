@@ -7,7 +7,7 @@ use serde::Deserialize;
 
 use crate::{
     libs::{
-        auth::Session_, constants::BYTES_NULL, db::get_connection, request::JsonReqult,
+        auth::Session_, constants::BYTES_NULL, db::get_connection, privilege, request::JsonReqult,
         response::JkmxJsonResponse, serde::WithJson,
     },
     models::{
@@ -64,10 +64,10 @@ async fn create_tag(
     req: JsonReqult<CreateTagRequest>,
 ) -> JkmxJsonResponse {
     let Json(CreateTagRequest { color, localized_names }) = req?;
-    let Some(session) = session else { return JkmxJsonResponse::Response(StatusCode::FORBIDDEN, BYTES_NULL); };
 
     let mut conn = get_connection().await?;
-    let Some(user) = User::from_session(&session, &mut conn).await? else { return JkmxJsonResponse::Response(StatusCode::FORBIDDEN, BYTES_NULL) };
+    let Some(user) = User::from_maybe_session(&session, &mut conn).await? else { return JkmxJsonResponse::Response(StatusCode::UNAUTHORIZED, BYTES_NULL) };
+    if !privilege::check(&user.uid, "Lean4OJ.ManageProblem", &mut conn).await? { return JkmxJsonResponse::Response(StatusCode::FORBIDDEN, BYTES_NULL); }
 
     let dict = localized_names.into_iter().collect::<LocaleDict>();
     let id = Tag::create(&color, &dict, &mut conn).await?;

@@ -9,24 +9,32 @@ use tokio_postgres::{Client, Row};
 use tower_sessions_core::Session;
 
 use crate::libs::{
+    constants::PASSWORD_LENGTH,
     db::{DBError, DBResult},
     serde::JsTime,
     session::GlobalStore,
     validate::check_uid,
 };
 
+mod information;
+pub use information::Information as UserInformation;
+
 #[derive(Serialize)]
 pub struct User {
     #[serde(rename = "id")]
     pub uid: CompactString,
     #[serde(skip)]
-    pub password: [u8; 43],
+    pub password: [u8; PASSWORD_LENGTH],
     pub username: CompactString,
     pub email: CompactString,
     #[serde(rename = "registrationTime", serialize_with = "JsTime")]
     pub register_time: SystemTime,
     #[serde(rename = "acceptedProblemCount")]
     pub ac: u32,
+    pub nickname: CompactString,
+    pub bio: CompactString,
+    #[serde(rename = "avatar")]
+    pub avatar_info: CompactString,
 }
 
 impl TryFrom<Row> for User {
@@ -42,13 +50,16 @@ impl TryFrom<Row> for User {
         let email = row.try_get::<_, &str>(3)?.into();
         let register_time = row.try_get(4)?;
         let ac = row.try_get::<_, i32>(5)?.cast_unsigned();
-        Ok(Self { uid, password, username, email, register_time, ac })
+        let nickname = row.try_get::<_, &str>(6)?.into();
+        let bio = row.try_get::<_, &str>(7)?.into();
+        let avatar_info = row.try_get::<_, &str>(8)?.into();
+        Ok(Self { uid, password, username, email, register_time, ac, nickname, bio, avatar_info })
     }
 }
 
 impl User {
     pub async fn by_uid(uid: &str, db: &mut Client) -> DBResult<Option<Self>> {
-        pub const SQL: &str = "select uid, password, username, email, register_time, ac from lean4oj.users where uid = $1 and username != ''";
+        pub const SQL: &str = "select uid, password, username, email, register_time, ac, nickname, bio, avatar_info from lean4oj.users where uid = $1 and username != ''";
 
         if !check_uid(uid) {
             return Ok(None);
@@ -67,11 +78,30 @@ impl User {
         Self::by_uid(&uid, db).await
     }
 
+    #[allow(clippy::ref_option)]
+    pub async fn from_maybe_session(session: &Option<Session<GlobalStore>>, db: &mut Client) -> DBResult<Option<Self>> {
+        if let Some(session) = session
+        && let Ok(Some(Value::String(uid))) = session.get_value("uid").await {
+            Self::by_uid(&uid, db).await
+        } else {
+            Ok(None)
+        }
+    }
+
     pub async fn list(skip: i64, take: i64, db: &mut Client) -> DBResult<Vec<Self>> {
-        pub const SQL: &str = "select uid, password, username, email, register_time, ac from lean4oj.users where username != '' order by ac desc, uid asc offset $1 limit $2";
+        pub const SQL: &str = "select uid, password, username, email, register_time, ac, nickname, bio, avatar_info from lean4oj.users where username != '' order by ac desc, uid offset $1 limit $2";
 
         let stmt = db.prepare_static(SQL.into()).await?;
-        let stream = db.query_raw(&stmt, &[&skip, &take]).await?;
+        let stream = db.query_raw(&stmt, [skip, take]).await?;
+        stream.and_then(|row| ready(Self::try_from(row))).try_collect().await
+    }
+
+    pub async fn search(uid: bool, query: &str, db: &mut Client) -> DBResult<Vec<Self>> {
+        pub const SQL_UID: &str = "select uid, password, username, email, register_time, ac, nickname, bio, avatar_info from lean4oj.users where username != '' and uid like $1 order by ac desc, uid limit 10";
+        pub const SQL_USERNAME: &str = "select uid, password, username, email, register_time, ac, nickname, bio, avatar_info from lean4oj.users where username != '' and username ilike $1 order by ac desc, uid limit 10";
+
+        let stmt = db.prepare_static(if uid { SQL_UID } else { SQL_USERNAME }.into()).await?;
+        let stream = db.query_raw(&stmt, [query]).await?;
         stream.and_then(|row| ready(Self::try_from(row))).try_collect().await
     }
 
@@ -83,4 +113,12 @@ impl User {
         let count = row.try_get::<_, i64>(0)?;
         Ok(count)
     }
+}
+
+#[derive(Serialize)]
+pub struct UserA {
+    #[serde(flatten)]
+    pub user: User,
+    #[serde(rename = "isAdmin")]
+    pub is_admin: bool,
 }

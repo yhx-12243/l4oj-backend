@@ -82,6 +82,7 @@ impl<S: serde::ser::SerializeTuple> SerializeTupleExt for S {
     where
         T: ?Sized + Display,
     {
+        // Won't be instantiated.
         unimplemented!("Not implemented intentionally.");
     }
 }

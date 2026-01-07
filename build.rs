@@ -19,7 +19,7 @@ fn compatible(p1: &Path, p2: &Path) -> bool {
 
 fn main() {
     let Output { stdout, .. } = Command::new("git")
-        .args(["show", "-s", "--pretty=%H %cI"])
+        .args(["show", "-s", "--pretty=%H %ct"])
         .output().unwrap();
     let value = String::from_utf8(stdout).unwrap();
     let (hash, date) = value.split_once(' ').unwrap();

@@ -1,6 +1,6 @@
-use std::{io, os::fd::RawFd};
 #[cfg(target_os = "linux")]
 use std::path::Path;
+use std::{io, os::fd::RawFd};
 
 #[cfg(false)]
 mod legacy {

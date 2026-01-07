@@ -32,11 +32,13 @@ impl FileEntry {
         sha1.finish() == self.sha1
     }
 
+    #[inline]
     pub fn path(&self) -> &Path {
         Path::new(unsafe { OsStr::from_encoded_bytes_unchecked(&self.path) })
     }
 }
 
+#[cfg(debug_assertions)]
 impl fmt::Debug for FileEntry {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct_field5_finish(
@@ -84,10 +86,10 @@ impl Ord for FileEntry {
         loop {
             let a = p1.next();
             let b = p2.next();
-            let Some(a) = a else { return if b.is_some() { Ordering::Less } else { Ordering::Equal }; };
-            let Some(b) = b else { return Ordering::Greater };
+            let Some(b) = b else { return if a.is_some() { Ordering::Greater } else { Ordering::Equal }; };
+            let Some(a) = a else { return Ordering::Less };
             let (Component::Normal(a), Component::Normal(b)) = (a, b) else { return a.cmp(&b) };
-            
+
             if a != b {
                 let α = ε(&p1) && self.mode  & libc::S_IFMT != libc::S_IFDIR;
                 let β = ε(&p2) && other.mode & libc::S_IFMT != libc::S_IFDIR;

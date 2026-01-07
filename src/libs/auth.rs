@@ -10,6 +10,8 @@ use tower_sessions_core::{Session, session::Id};
 
 use super::session::{self, GlobalStore};
 
+pub mod availability;
+
 #[repr(transparent)]
 pub struct Session_(pub Option<Session<GlobalStore>>);
 

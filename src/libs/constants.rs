@@ -6,6 +6,7 @@ use http::header::{HeaderName, HeaderValue};
 use bytes::Bytes;
 
 pub const BYTES_NULL: Bytes = Bytes::from_static(b"null");
+pub const BYTES_EMPTY: Bytes = Bytes::from_static(b"{}");
 pub const FORWARDED_HOST: HeaderName = HeaderName::from_static("d579fff85ca2d5edeaa17f53ab008dc84eb292a5");
 pub const REMOTE_ADDR: HeaderName = HeaderName::from_static("009f34034b761c32384fde345378c488efc18c59");
 pub const X_ACCEL_REDIRECT: HeaderName = HeaderName::from_static("x-accel-redirect");
@@ -30,3 +31,5 @@ pub const GLOBAL_INTERVAL: Duration = Duration::from_secs(
 );
 
 pub const SESSION_EXPIRE: Duration = Duration::from_hours(1);
+
+pub const PASSWORD_LENGTH: usize = 43;

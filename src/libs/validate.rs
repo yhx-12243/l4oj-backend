@@ -5,7 +5,23 @@ use pcre2::bytes::{Regex, RegexBuilder};
 use super::util::unescape_quoted;
 
 pub fn check_username(username: &str) -> bool {
-    3 <= username.len() && username.len() <= 24 && username.bytes().all(|x| matches!(x,  b'#' | b'$' | b'-' | b'.' | b'0'..=b'9' | b'A'..=b'Z' | b'_' | b'a'..=b'z'))
+    3 <= username.len() && username.len() <= 24 && username.bytes().all(|x| matches!(x, b'#' | b'$' | b'-' | b'.' | b'0'..=b'9' | b'A'..=b'Z' | b'_' | b'a'..=b'z'))
+}
+
+pub const fn is_admin_group(groupname: &str) -> bool {
+    groupname.eq_ignore_ascii_case("Lean4OJ.Admin")
+}
+
+pub const fn is_system_group(groupname: &str) -> bool {
+    if let Some(prefix) = groupname.get(..8) && prefix.eq_ignore_ascii_case("Lean4OJ.") {
+        true
+    } else {
+        false
+    }
+}
+
+pub fn check_groupname(groupname: &str) -> bool {
+    !groupname.is_empty() && groupname.len() <= 48 && !is_system_group(groupname) && groupname.bytes().all(|x| matches!(x, b' ' | b'#' | b'$' | b'-'..=b':' | b'@'..=b'Z' | b'_' | b'a'..=b'z' | b'~' ))
 }
 
 pub fn is_lean_id_first(ch: char) -> bool {

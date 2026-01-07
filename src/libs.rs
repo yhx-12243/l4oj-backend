@@ -5,10 +5,12 @@ pub mod db;
 pub mod error;
 pub mod fs;
 pub mod logger;
+pub mod lquery;
 pub mod olean;
 pub mod preference {
     pub mod server;
 }
+pub mod privilege;
 pub mod request;
 pub mod response;
 pub mod serde;

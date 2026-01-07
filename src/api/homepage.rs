@@ -1,12 +1,19 @@
-use axum::{Router, extract::Query, routing::get};
+use axum::{
+    Router,
+    extract::Query,
+    routing::{get, get_service},
+};
 use compact_str::CompactString;
-use http::StatusCode;
+use http::{StatusCode, response::Parts};
 use serde::{Deserialize, Serialize};
 
 use crate::{
     libs::{
-        db::get_connection, preference::server::Pagination, request::Repult,
-        response::JkmxJsonResponse, serde::SliceMap,
+        db::get_connection,
+        preference::server::Pagination,
+        request::{RawPayload, Repult},
+        response::JkmxJsonResponse,
+        serde::SliceMap,
     },
     models::user::User,
 };
@@ -91,6 +98,12 @@ async fn get_homepage(req: Repult<Query<HomepageRequest>>) -> JkmxJsonResponse {
     JkmxJsonResponse::Response(StatusCode::OK, serde_json::to_vec(&res)?.into())
 }
 
-pub fn router() -> Router {
-    Router::new().route("/getHomepage", get(get_homepage))
+const fn get_homepage_settings(header: &'static Parts) -> RawPayload {
+    RawPayload { header, body: br#"{"annnouncementDiscussions":[],"settings":{"notice":{"contents":{}},"announcements":{"items":{}}}}"# }
+}
+
+pub fn router(header: &'static Parts) -> Router {
+    Router::new()
+        .route("/getHomepage", get(get_homepage))
+        .route("/getHomepageSettings", get_service(get_homepage_settings(header)))
 }

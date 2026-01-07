@@ -33,7 +33,7 @@ impl TryFrom<Row> for Tag {
 
 impl Tag {
     pub async fn list(db: &mut Client) -> DBResult<Vec<Self>> {
-        pub const SQL: &str = "select id, color, name from lean4oj.tags";
+        pub const SQL: &str = "select id, color, name from lean4oj.tags order by id";
 
         let stmt = db.prepare_static(SQL.into()).await?;
         let stream = db.query_raw(&stmt, core::iter::empty::<&dyn ToSql>()).await?;
