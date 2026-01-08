@@ -1,3 +1,4 @@
+pub mod discussion;
 pub mod localedict;
 pub mod group;
 pub mod tag;

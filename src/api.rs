@@ -5,6 +5,7 @@ use tower_http::cors::CorsLayer;
 use crate::libs::constants::APPLICATION_JSON_UTF_8;
 
 mod auth;
+mod discussion;
 // pub mod fs;
 mod group;
 mod homepage;
@@ -21,6 +22,7 @@ pub fn all() -> Router {
 
     Router::new()
         .nest("/auth", auth::router(header))
+        .nest("/discussion", discussion::router(header))
         .nest("/group", group::router(header))
         .nest("/homepage", homepage::router(header))
         .nest("/judgeClient", judge_client::router(header))

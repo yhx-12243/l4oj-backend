@@ -18,12 +18,12 @@ impl TryFrom<Row> for Information {
     type Error = tokio_postgres::Error;
 
     fn try_from(row: Row) -> Result<Self, Self::Error> {
-        let organization = row.try_get::<_, &str>(0)?.into();
-        let location = row.try_get::<_, &str>(1)?.into();
-        let url = row.try_get::<_, &str>(2)?.into();
-        let telegram = row.try_get::<_, &str>(3)?.into();
-        let qq = row.try_get::<_, &str>(4)?.into();
-        let github = row.try_get::<_, &str>(5)?.into();
+        let organization = row.try_get::<_, &str>("organization")?.into();
+        let location = row.try_get::<_, &str>("location")?.into();
+        let url = row.try_get::<_, &str>("url")?.into();
+        let telegram = row.try_get::<_, &str>("telegram")?.into();
+        let qq = row.try_get::<_, &str>("qq")?.into();
+        let github = row.try_get::<_, &str>("github")?.into();
         Ok(Self { organization, location, url, telegram, qq, github })
     }
 }

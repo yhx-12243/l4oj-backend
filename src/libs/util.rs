@@ -1,5 +1,5 @@
-use core::{ascii::Char, cell::UnsafeCell};
-use std::borrow::Cow;
+use core::{ascii::Char, cell::UnsafeCell, time::Duration};
+use std::{borrow::Cow, time::SystemTime};
 
 /// leading double quote is NOT included, the trailing one is REQUIRED.
 ///
@@ -27,6 +27,12 @@ pub fn unescape_quoted(str: &str) -> Result<Cow<'_, str>, serde_json::Error> {
             position.column,
         ))
     }
+}
+
+#[inline]
+#[allow(clippy::transmute_undefined_repr)]
+pub const fn get_millis(time: SystemTime) -> u128 {
+    unsafe { core::mem::transmute::<SystemTime, Duration>(time).as_millis() }
 }
 
 pub fn gen_random_ascii<const N: usize>() -> [Char; N] {

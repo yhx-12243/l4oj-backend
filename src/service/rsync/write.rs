@@ -6,6 +6,7 @@ use core::{
     str::pattern::Pattern,
 };
 use std::{
+    ffi::OsStr,
     fs::ReadDir,
     io,
     os::{
@@ -187,15 +188,16 @@ fn do_delete(
         let name = entry.file_name_ref();
         let type_ = entry.file_type()?;
         cwd.push(name);
+        let pname = name.as_encoded_bytes().as_ptr();
         if type_.is_dir() {
-            let fd = unsafe { libc::openat(dir, name.as_encoded_bytes().as_ptr().cast(), libc::O_DIRECTORY) };
+            let fd = unsafe { libc::openat(dir, pname.cast(), libc::O_DIRECTORY) };
             if fd == -1 { return Err(io::Error::last_os_error()); }
             let (sub_delcnt, sub_alived) = do_delete(cwd, exempt, fd, &mut readdir_from_rawfd(fd)?)?;
             delcnt += sub_delcnt;
             if sub_alived {
                 alived = true;
             } else {
-                if unsafe { libc::unlinkat(dir, name.as_encoded_bytes().as_ptr().cast(), libc::AT_REMOVEDIR) } != 0 {
+                if unsafe { libc::unlinkat(dir, pname.cast(), libc::AT_REMOVEDIR) } != 0 {
                     return Err(io::Error::last_os_error());
                 }
                 delcnt += 1;
@@ -203,7 +205,7 @@ fn do_delete(
         } else if exempt.contains(cwd.as_os_str().as_encoded_bytes()) {
             alived = true;
         } else {
-            if unsafe { libc::unlinkat(dir, name.as_encoded_bytes().as_ptr().cast(), 0) } != 0 {
+            if unsafe { libc::unlinkat(dir, pname.cast(), 0) } != 0 {
                 return Err(io::Error::last_os_error());
             }
             delcnt += 1;
@@ -274,7 +276,10 @@ where
         }
         let buf = unsafe { slice::from_raw_parts(g.0 as *const u8, entry.size) };
         if lean_version(buf).is_none() {
-            return Err("not a valid Lean olean file".into());
+            return Err(format!(
+                "{}: not a valid olean file",
+                unsafe { OsStr::from_encoded_bytes_unchecked(target) }.display(),
+            ).into());
         }
         drop(g);
         cfg_select! {
@@ -298,6 +303,7 @@ where
     }
 }
 
+#[allow(clippy::too_many_lines)]
 pub async fn main(
     mut c2s: BufReader<OwnedReadHalf>,
     mut s2c: BufWriter<OwnedWriteHalf>,
@@ -329,11 +335,17 @@ pub async fn main(
             TOTAL_FILE_LIMIT
         }
     };
-    let mut buf = format!(".internal/lean/{}/", user.uid);
-    let mut fl = generate_file_list(&mut rx, unsafe { buf.get_unchecked(14..) }, limit).await?;
+    let mut buf = format!(env!("OLEAN_ROOT"), user.uid);
+    let mut fl = generate_file_list(
+        &mut rx,
+        unsafe { buf.get_unchecked(const { env!("OLEAN_ROOT").len() - 4 }..) },
+        limit,
+    ).await?;
     fl.sort();
     unsafe { *buf.as_mut_vec().get_unchecked_mut(Last) = 0; }
-    if unsafe { libc::mkdir(buf.as_ptr().cast(), 0o777) } != 0 {
+    if unsafe { libc::mkdir(buf.as_ptr().cast(),
+        cfg_select!(target_os = "linux" => { 0o700 } _ => { 0o777 })
+    ) } != 0 {
         let err = io::Error::last_os_error();
         if err.raw_os_error() != Some(libc::EEXIST) { return Err(err.into()); }
     }

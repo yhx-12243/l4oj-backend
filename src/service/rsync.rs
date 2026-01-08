@@ -62,7 +62,7 @@ async fn main_inner(
     let s2c = BufWriter::new(s2c);
 
     let ss = c2s.read_u32_le().await?;
-    if ss > 1024 { return Err(format!("reverse proxy error").into()); }
+    if ss > 1024 { return Err("reverse proxy error".into()); }
     let sni = if ss != 0 {
         let mut buf = String::with_capacity((ss + 13) as usize);
         buf.push_str("https://");
@@ -105,7 +105,7 @@ async fn main_inner(
     }
 
     match mode {
-        Mode::Read => read::main(c2s, s2c),
+        Mode::Read => read::main(c2s, s2c, sni, uid),
         Mode::Write => {
             let user = {
                 let mut conn = get_connection().await?;

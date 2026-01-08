@@ -11,6 +11,7 @@
     cfg_select,
     const_array,
     const_cmp,
+    const_convert,
     const_default,
     // const_format_args,
     const_index,
@@ -110,6 +111,7 @@
     incomplete_features,
     mixed_script_confusables,
     refining_impl_trait,
+    uncommon_codepoints,
 )]
 
 mod api;

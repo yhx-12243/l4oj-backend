@@ -124,9 +124,9 @@ async fn update_user_profile(
 ) -> JkmxJsonResponse {
     const SQL_UPDATE_USER: &str = "update lean4oj.users set username = $1, email = $2, avatar_info = $3, nickname = $4, bio = $5 where uid = $6";
     const SQL_UPDATE_INFORMATION: &str = "update lean4oj.user_information set organization = $1, location = $2, url = $3, telegram = $4, qq = $5, github = $6 where uid = $7";
-    
+   
     let Json(UpdateUserProfileRequest { user_id, username, email, avatar_info, nickname, bio, information }) = req?;
-    
+   
     if !check_username(&username) { bad!(BYTES_NULL) }
 
     let mut conn = get_connection().await?;
@@ -151,9 +151,9 @@ async fn update_user_profile(
 #[derive(Deserialize)]
 struct GetUserListRequest {
     #[serde(rename = "skipCount")]
-    skip: i64,
+    skip: u64,
     #[serde(rename = "takeCount")]
-    take: i64,
+    take: u64,
 }
 
 async fn get_user_list(req: JsonReqult<GetUserListRequest>) -> JkmxJsonResponse {

@@ -24,9 +24,9 @@ impl TryFrom<Row> for Tag {
     type Error = DBError;
 
     fn try_from(row: Row) -> Result<Self, Self::Error> {
-        let id = row.try_get::<_, i32>(0)?.cast_unsigned();
-        let color = row.try_get::<_, &str>(1)?.into();
-        let Json(name) = row.try_get(2)?;
+        let id = row.try_get::<_, i32>("id")?.cast_unsigned();
+        let color = row.try_get::<_, &str>("color")?.into();
+        let Json(name) = row.try_get("name")?;
         Ok(Self { id, color, name })
     }
 }

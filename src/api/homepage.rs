@@ -81,7 +81,7 @@ async fn get_homepage(req: Repult<Query<HomepageRequest>>) -> JkmxJsonResponse {
     let mut conn = get_connection().await?;
     let top_users = User::list(
         0,
-        const { Pagination::default().homepage_user_list as i64 },
+        const { Pagination::default().homepage_user_list.into() },
         &mut conn,
     )
     .await?;
@@ -95,6 +95,7 @@ async fn get_homepage(req: Repult<Query<HomepageRequest>>) -> JkmxJsonResponse {
         top_users,
         latest_updated_problems: [],
     };
+
     JkmxJsonResponse::Response(StatusCode::OK, serde_json::to_vec(&res)?.into())
 }
 

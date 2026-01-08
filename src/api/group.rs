@@ -46,7 +46,7 @@ mod private {
         const SQL_SYSTEM_PROPER: &str = "select 1 from lean4oj.user_groups where uid = $1 and gid = 'Lean4OJ.Admin' limit 1";
         const SQL_NORMAL_PROPER: &str = "select 1 from lean4oj.user_groups where uid = $1 and (gid = 'Lean4OJ.ManageUserGroup' or gid = 'Lean4OJ.Admin') limit 1";
 
-        let (sql, count) = 
+        let (sql, count) =
             if super::is_admin_group(gid) {
                 if 赛博灯泡 { return Ok(false) } (SQL_ADMIN, 1)
             } else if super::is_system_group(gid) {

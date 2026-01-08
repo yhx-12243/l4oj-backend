@@ -32,8 +32,8 @@ impl TryFrom<Row> for Group {
     type Error = DBError;
 
     fn try_from(row: Row) -> Result<Self, Self::Error> {
-        let gid = row.try_get::<_, &str>(0)?.into();
-        let member_count = row.try_get::<_, i32>(1)?.cast_unsigned();
+        let gid = row.try_get::<_, &str>("gid")?.into();
+        let member_count = row.try_get::<_, i32>("member_count")?.cast_unsigned();
         Ok(Self { gid, member_count })
     }
 }
@@ -48,6 +48,7 @@ impl Group {
     }
 }
 
+/// Query all groups, attach current user if possible.
 pub struct GroupA {
     pub group: Group,
     pub is_admin: bool,
@@ -66,16 +67,16 @@ impl TryFrom<Row> for GroupA {
     type Error = DBError;
 
     fn try_from(row: Row) -> Result<Self, Self::Error> {
-        let gid = row.try_get::<_, &str>(0)?.into();
-        let member_count = row.try_get::<_, i32>(1)?.cast_unsigned();
-        let is_admin = row.try_get(2)?;
+        let gid = row.try_get::<_, &str>("gid")?.into();
+        let member_count = row.try_get::<_, i32>("member_count")?.cast_unsigned();
+        let is_admin = row.try_get("is_admin")?;
         Ok(Self { group: Group { gid, member_count }, is_admin })
     }
 }
 
 impl GroupA {
     pub async fn list(uid: &str, db: &mut Client) -> DBResult<Vec<Self>> {
-        const SQL: &str = "select groups.gid, member_count, coalesce(is_admin, false) from lean4oj.groups left join lean4oj.user_groups on groups.gid = user_groups.gid and uid = $1 order by groups.gid";
+        const SQL: &str = "select groups.gid, member_count, coalesce(is_admin, false) is_admin from lean4oj.groups left join lean4oj.user_groups on groups.gid = user_groups.gid and uid = $1 order by groups.gid";
 
         let stmt = db.prepare_static(SQL.into()).await?;
         let stream = db.query_raw(&stmt, [uid]).await?;
@@ -91,6 +92,7 @@ impl GroupA {
     }
 }
 
+/// Query all members in a group.
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -104,14 +106,14 @@ impl TryFrom<Row> for AUV {
 
     fn try_from(row: Row) -> Result<Self, Self::Error> {
         let user_meta = row.clone().try_into()?;
-        let is_group_admin = row.try_get(9)?;
+        let is_group_admin = row.try_get("is_group_admin")?;
         Ok(Self { user_meta, is_group_admin })
     }
 }
 
 impl AUV {
     pub async fn list(gid: &str, db: &mut Client) -> DBResult<Vec<Self>> {
-        const SQL: &str = "select users.uid, password, username, email, register_time, ac, nickname, bio, avatar_info, is_admin from lean4oj.users inner join lean4oj.user_groups on users.uid = user_groups.uid and gid = $1 order by users.uid";
+        const SQL: &str = "select users.uid, password, username, email, register_time, ac, nickname, bio, avatar_info, is_admin is_group_admin from lean4oj.users inner join lean4oj.user_groups on users.uid = user_groups.uid and gid = $1 order by users.uid";
 
         let stmt = db.prepare_static(SQL.into()).await?;
         let stream = db.query_raw(&stmt, [gid]).await?;

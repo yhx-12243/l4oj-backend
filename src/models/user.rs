@@ -41,18 +41,18 @@ impl TryFrom<Row> for User {
     type Error = DBError;
 
     fn try_from(row: Row) -> Result<Self, Self::Error> {
-        let uid = row.try_get::<_, &str>(0)?.into();
-        let password = row.try_get::<_, &str>(1)?.as_bytes();
+        let uid = row.try_get::<_, &str>("uid")?.into();
+        let password = row.try_get::<_, &str>("password")?.as_bytes();
         let password = password.try_into().map_err(|e|
             DBError::new(tokio_postgres::error::Kind::FromSql(1), Some(Box::new(e)))
         )?;
-        let username = row.try_get::<_, &str>(2)?.into();
-        let email = row.try_get::<_, &str>(3)?.into();
-        let register_time = row.try_get(4)?;
-        let ac = row.try_get::<_, i32>(5)?.cast_unsigned();
-        let nickname = row.try_get::<_, &str>(6)?.into();
-        let bio = row.try_get::<_, &str>(7)?.into();
-        let avatar_info = row.try_get::<_, &str>(8)?.into();
+        let username = row.try_get::<_, &str>("username")?.into();
+        let email = row.try_get::<_, &str>("email")?.into();
+        let register_time = row.try_get("register_time")?;
+        let ac = row.try_get::<_, i32>("ac")?.cast_unsigned();
+        let nickname = row.try_get::<_, &str>("nickname")?.into();
+        let bio = row.try_get::<_, &str>("bio")?.into();
+        let avatar_info = row.try_get::<_, &str>("avatar_info")?.into();
         Ok(Self { uid, password, username, email, register_time, ac, nickname, bio, avatar_info })
     }
 }
@@ -88,11 +88,11 @@ impl User {
         }
     }
 
-    pub async fn list(skip: i64, take: i64, db: &mut Client) -> DBResult<Vec<Self>> {
+    pub async fn list(skip: u64, take: u64, db: &mut Client) -> DBResult<Vec<Self>> {
         pub const SQL: &str = "select uid, password, username, email, register_time, ac, nickname, bio, avatar_info from lean4oj.users where username != '' order by ac desc, uid offset $1 limit $2";
 
         let stmt = db.prepare_static(SQL.into()).await?;
-        let stream = db.query_raw(&stmt, [skip, take]).await?;
+        let stream = db.query_raw(&stmt, [skip.min(i64::MAX.cast_unsigned()).cast_signed(), take.min(100).cast_signed()]).await?;
         stream.and_then(|row| ready(Self::try_from(row))).try_collect().await
     }
 
@@ -105,13 +105,12 @@ impl User {
         stream.and_then(|row| ready(Self::try_from(row))).try_collect().await
     }
 
-    pub async fn count(db: &mut Client) -> DBResult<i64> {
+    pub async fn count(db: &mut Client) -> DBResult<u64> {
         pub const SQL: &str = "select count(*) from lean4oj.users where username != ''";
 
         let stmt = db.prepare_static(SQL.into()).await?;
         let row = db.query_one(&stmt, &[]).await?;
-        let count = row.try_get::<_, i64>(0)?;
-        Ok(count)
+        row.try_get::<_, i64>(0).map(i64::cast_unsigned)
     }
 }
 
@@ -123,6 +122,7 @@ pub struct UserA {
     pub is_admin: bool,
 }
 
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UserAOE {
