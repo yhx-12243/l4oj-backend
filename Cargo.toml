@@ -19,7 +19,7 @@ hashbrown = { version = "0.16.1", features = ["nightly", "serde"] }
 http = "1.4.0"
 hyper = { version = "1.8.1", features = ["nightly"] }
 hyper-util = "0.1.19"
-libc = "0.2.179"
+libc = "0.2.180"
 log = { version = "0.4.29", features = ["release_max_level_info"] }
 memchr = "2.7.6"
 openssl = "0.10.75"

@@ -91,7 +91,7 @@ impl const Default for Misc {
             plausible_api_endpoint: (),
             gravatar_cdn: "https://cravatar.cn",
             render_markdown_in_user_bio: true,
-            discussion_reaction_emojis: &["👍", "👎", "😄", "😕", "❤️", "🤔", "🤣", "🌿", "🍋", "🕊️"],
+            discussion_reaction_emojis: &["👍", "👎", "😄", "😕", "❤", "🤔", "🤣", "🌿", "🍋", "🕊"],
             discussion_reaction_allow_custom_emojis: true,
         }
     }

@@ -137,3 +137,48 @@ where
 
     to_sql_checked!();
 }
+
+#[derive(Debug)]
+#[repr(transparent)]
+pub struct ToSqlIterUnsafe<T>(pub T);
+
+impl<T, U> ToSql for ToSqlIterUnsafe<T>
+where
+    T: Iterator<Item = U> + Clone + core::fmt::Debug,
+    U: ToSql,
+{
+    fn to_sql(&self, ty: &Type, out: &mut bytes::BytesMut) -> Result<IsNull, BoxedStdError> {
+        let Kind::Array(member_type) = ty.kind() else {
+            panic!("expected array type")
+        };
+
+        let lower_bound = match *ty {
+            Type::OID_VECTOR | Type::INT2_VECTOR => 0,
+            _ => 1,
+        };
+
+        let dimension = postgres_protocol::types::ArrayDimension {
+            len: self.0.size_hint().0.try_into()?,
+            lower_bound,
+        };
+
+        postgres_protocol::types::array_to_sql(
+            Some(dimension),
+            member_type.oid(),
+            self.0.clone(),
+            |e, w| match e.to_sql(member_type, w)? {
+                IsNull::No => Ok(postgres_protocol::IsNull::No),
+                IsNull::Yes => Ok(postgres_protocol::IsNull::Yes),
+            },
+            out,
+        )?;
+        Ok(IsNull::No)
+    }
+
+    #[inline]
+    fn accepts(_: &Type) -> bool {
+        true
+    }
+
+    to_sql_checked!();
+}

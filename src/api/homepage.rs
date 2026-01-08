@@ -15,7 +15,10 @@ use crate::{
         response::JkmxJsonResponse,
         serde::SliceMap,
     },
-    models::user::User,
+    models::{
+        discussion::Discussion,
+        user::User,
+    },
 };
 
 #[repr(transparent)]
@@ -67,7 +70,7 @@ struct HomepageRequest {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct HomepageResponse<'a> {
-    announcements: [!; 0],
+    announcements: Vec<Discussion>,
     hitokoto: HitokotoConfig,
     countdown: Countdowns,
     friend_links: FriendLinks<'a>,
@@ -83,12 +86,13 @@ async fn get_homepage(req: Repult<Query<HomepageRequest>>) -> JkmxJsonResponse {
         0,
         const { Pagination::default().homepage_user_list.into() },
         &mut conn,
-    )
-    .await?;
+    ).await?;
 
+    let mut announcements = Discussion::by_ids([1, 6, 3, 8, 7].into_iter(), &mut conn).await?;
+    for d in &mut announcements { d.backdoor(locale.as_deref()); }
     let links = links::friend_links(locale.as_deref());
     let res = HomepageResponse {
-        announcements: [],
+        announcements,
         hitokoto: const { HitokotoConfig::default() },
         countdown: const { Countdowns::default() },
         friend_links: FriendLinks { links: SliceMap::from_slice(&links) },
@@ -100,7 +104,7 @@ async fn get_homepage(req: Repult<Query<HomepageRequest>>) -> JkmxJsonResponse {
 }
 
 const fn get_homepage_settings(header: &'static Parts) -> RawPayload {
-    RawPayload { header, body: br#"{"annnouncementDiscussions":[],"settings":{"notice":{"contents":{}},"announcements":{"items":{}}}}"# }
+    RawPayload { header, body: br#"{"announcementDiscussions":[],"settings":{"notice":{"contents":{}},"announcements":{"items":{}}}}"# }
 }
 
 pub fn router(header: &'static Parts) -> Router {

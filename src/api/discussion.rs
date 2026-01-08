@@ -1,4 +1,4 @@
-use core::mem;
+use core::{fmt::Write, mem};
 use std::time::SystemTime;
 
 use axum::{
@@ -13,29 +13,49 @@ use serde::{
     Deserialize, Serialize, Serializer,
     ser::{SerializeMap, SerializeSeq},
 };
+use smallvec::SmallVec;
+use tokio_postgres::types::ToSql;
 
 use crate::{
     libs::{
         auth::Session_,
         constants::{BYTES_EMPTY, BYTES_NULL},
         db::{DBError, get_connection},
-        privilege,
+        emoji, privilege,
         request::{JsonReqult, RawPayload},
         response::JkmxJsonResponse,
-        serde::WithJson, util::get_millis,
+        serde::WithJson,
+        util::get_millis,
+        validate::is_lean_id,
     },
     models::{
         discussion::{
-            Discussion, DiscussionReactionAOE, DiscussionReply, DiscussionReplyAOE,
-            PERMISSION_DEFAULT, QueryRepliesType,
+            Discussion, DiscussionReactionAOE, DiscussionReactionType, DiscussionReply,
+            DiscussionReplyAOE, QueryRepliesType, REPLY_PERMISSION_DEFAULT, reaction_aoe,
         },
         user::{User, UserAOE},
     },
 };
 
-pub const NO_SUCH_DISCUSSION: JkmxJsonResponse = JkmxJsonResponse::Response(
+const INVALID_EMOJI: JkmxJsonResponse = JkmxJsonResponse::Response(
+    StatusCode::OK,
+    Bytes::from_static(br#"{"error":"INVALID_EMOJI"}"#),
+);
+const NO_FLAGS: JkmxJsonResponse = JkmxJsonResponse::Response(
+    StatusCode::OK,
+    Bytes::from_static(br#"{"error":"NO_FLAGS"}"#),
+);
+const NO_SUCH_DISCUSSION: JkmxJsonResponse = JkmxJsonResponse::Response(
     StatusCode::OK,
     Bytes::from_static(br#"{"error":"NO_SUCH_DISCUSSION"}"#),
+);
+const NO_SUCH_DISCUSSION_REPLY: JkmxJsonResponse = JkmxJsonResponse::Response(
+    StatusCode::OK,
+    Bytes::from_static(br#"{"error":"NO_SUCH_DISCUSSION_REPLY"}"#),
+);
+const NO_SUCH_USER: JkmxJsonResponse = JkmxJsonResponse::Response(
+    StatusCode::OK,
+    Bytes::from_static(br#"{"error":"NO_SUCH_USER"}"#),
 );
 
 mod private {
@@ -116,16 +136,172 @@ async fn create_reply(
     let aoe = DiscussionReplyAOE {
         reply: &reply,
         publisher: Some(&user_aoe),
-        reactions: DiscussionReactionAOE::default(),
-        permissions: PERMISSION_DEFAULT,
+        reactions: Some(&DiscussionReactionAOE::default()),
+        permissions: REPLY_PERMISSION_DEFAULT,
     };
     let res = format!(r#"{{"reply":{}}}"#, WithJson(aoe));
     JkmxJsonResponse::Response(StatusCode::OK, res.into())
 }
 
-async fn query_discussions(_todo: ()) -> JkmxJsonResponse {
-    let res = r#"{"count":0,"discussions":[],"permissions":{"createDiscussion":true,"filterNonpublic":true}}"#;
-    JkmxJsonResponse::Response(http::StatusCode::OK, res.into())
+#[derive(Deserialize)]
+struct ReactionRequest {
+    r#type: DiscussionReactionType,
+    id: u32,
+    emoji: CompactString,
+    reaction: bool,
+}
+
+async fn reaction(
+    Session_(session): Session_,
+    req: JsonReqult<ReactionRequest>,
+) -> JkmxJsonResponse {
+    const SQL_EXIST_D: &str = "select 1 from lean4oj.discussions where id = $1";
+    const SQL_EXIST_R: &str = "select 1 from lean4oj.discussion_replies where id = $1";
+    const SQL_REACT_ADD: &str = "insert into lean4oj.discussion_reactions (eid, uid, emoji) values ($1, $2, $3)";
+    const SQL_REACT_DEL: &str = "delete from lean4oj.discussion_reactions where eid = $1 and uid = $2 and emoji = $3";
+
+    let Json(ReactionRequest { r#type: ty, id, emoji, reaction }) = req?;
+
+    if emoji.chars().any(|ch| matches!(ch, '🇦'..='🇿')) { return NO_FLAGS; }
+    let Some(emoji) = emoji::normalize(&emoji) else { return INVALID_EMOJI };
+
+    let mut conn = get_connection().await?;
+    let Some(user) = User::from_maybe_session(&session, &mut conn).await? else { return JkmxJsonResponse::Response(StatusCode::UNAUTHORIZED, BYTES_NULL) };
+
+    let eid = match ty {
+        DiscussionReactionType::Discussion => {
+            let stmt = conn.prepare_static(SQL_EXIST_D.into()).await?;
+            if conn.query_opt(&stmt, &[&id.cast_signed()]).await?.is_none() { return NO_SUCH_DISCUSSION; }
+            id
+        }
+        DiscussionReactionType::DiscussionReply => {
+            let stmt = conn.prepare_static(SQL_EXIST_R.into()).await?;
+            if conn.query_opt(&stmt, &[&id.cast_signed()]).await?.is_none() { return NO_SUCH_DISCUSSION_REPLY; }
+            !id
+        }
+    }.cast_signed();
+
+    let stmt = conn.prepare_static(if reaction { SQL_REACT_ADD } else { SQL_REACT_DEL }.into()).await?;
+    let n = conn.execute(&stmt, &[&eid, &&*user.uid, &&*emoji]).await?;
+    if n != 1 { return private::err(); }
+
+    let res = format!(r#"{{"normalized":"{emoji}"}}"#); // emoji never needs escape.
+    JkmxJsonResponse::Response(StatusCode::OK, res.into())
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct QueryDiscussionRequest {
+    locale: Option<CompactString>,
+    keyword: Option<CompactString>,
+    // problem_id
+    publisher_id: Option<CompactString>,
+    title_only: Option<bool>,
+    skip_count: u64,
+    take_count: u64,
+}
+
+#[derive(Serialize)]
+#[repr(transparent)]
+struct Inner1 {
+    meta: Discussion,
+}
+
+#[derive(Serialize)]
+struct Inner2 {
+    meta: Discussion,
+    publisher: User,
+}
+
+impl From<(Discussion, User)> for Inner2 {
+    #[inline(always)]
+    fn from((meta, publisher): (Discussion, User)) -> Self {
+        Self { meta, publisher }
+    }
+}
+
+#[inline]
+const fn 𝑛𝑒𝑒𝑑_𝑒𝑠𝑐𝑎𝑝𝑒(x: u8) -> bool { matches!(x, b'%' | b'\\' | b'_') }
+
+async fn query_discussions(req: JsonReqult<QueryDiscussionRequest>) -> JkmxJsonResponse {
+    let Json(QueryDiscussionRequest { locale, keyword, publisher_id, title_only, skip_count, take_count }) = req?;
+
+    let kw = keyword.as_deref().unwrap_or_default();
+    let uid = publisher_id.as_deref().unwrap_or_default();
+    let has_kw = !kw.is_empty();
+    let has_uid = is_lean_id(uid);
+    let mut ekw = kw;
+    let mut buf;
+    if has_kw {
+        let c = kw.bytes().filter(|&x| 𝑛𝑒𝑒𝑑_𝑒𝑠𝑐𝑎𝑝𝑒(x)).count();
+        buf = Vec::with_capacity(kw.len() + c + 2);
+        buf.push(b'%');
+        for b in kw.bytes() {
+            if 𝑛𝑒𝑒𝑑_𝑒𝑠𝑐𝑎𝑝𝑒(b) { buf.push(b'\\'); }
+            buf.push(b);
+        }
+        buf.push(b'%');
+        ekw = unsafe { core::str::from_utf8_unchecked(&buf) };
+    }
+
+    let extend = |mut sql: String, mut args: SmallVec<[&'static (dyn ToSql + Sync); 8]>| -> (String, SmallVec<[&'static (dyn ToSql + Sync); 8]>) {
+        let mut prefix = " where";
+        if has_kw {
+            let _ = write!(&mut sql, " where title ilike ${}", args.len() + 1);
+            prefix = " and";
+            args.push(
+                unsafe { core::mem::transmute::<&&str, &'static &str>(&ekw) } as _
+            );
+        }
+        if has_uid {
+            let _ = write!(&mut sql, "{prefix} publisher = ${}", args.len() + 1);
+            args.push(
+                unsafe { core::mem::transmute::<&&str, &'static &str>(&uid) } as _
+            );
+        }
+        (sql, args)
+    };
+
+    let mut res = r#"{"discussions":"#.to_owned();
+    let mut conn = get_connection().await?;
+
+    if title_only == Some(true) {
+        let discussions = if kw.contains('\u{ea97}') {
+            Vec::new()
+        } else {
+            let mut discussions = Discussion::search(skip_count, take_count, extend, &mut conn).await?;
+            for d in &mut discussions { d.backdoor(locale.as_deref()); }
+            #[allow(clippy::transmute_undefined_repr)]
+            unsafe { core::mem::transmute::<Vec<Discussion>, Vec<Inner1>>(discussions) }
+        };
+        serde_json::to_writer(unsafe { res.as_mut_vec() }, &discussions)?;
+        let count = Discussion::count(extend, &mut conn).await?;
+        write!(&mut res, r#","count":{count}}}"#)?;
+    } else {
+        let mut discussions = Vec::new();
+        if !kw.contains('\u{ea97}') {
+            discussions = Discussion::search_aoe(skip_count, take_count, extend, &mut conn).await?.into_iter().map(Into::into).collect::<Vec<Inner2>>();
+            for d in &mut discussions { d.meta.backdoor(locale.as_deref()); }
+        }
+        serde_json::to_writer(unsafe { res.as_mut_vec() }, &discussions)?;
+        let count = Discussion::count(extend, &mut conn).await?;
+        write!(&mut res, r#","permissions":{{"createDiscussion":true,"filterNonpublic":true}},"count":{count}"#)?;
+        if has_uid {
+            res.push_str(r#","filterPublisher":"#);
+            let user;
+            serde_json::to_writer(
+                unsafe { res.as_mut_vec() },
+                if let Some(Inner2 { publisher, .. }) = discussions.first() {
+                    publisher
+                } else {
+                    user = User::by_uid(uid, &mut conn).await?;
+                    if let Some(u) = user.as_ref() { u } else { return NO_SUCH_USER; }
+                }
+            )?;
+        }
+        res.push('}');
+    }
+    JkmxJsonResponse::Response(StatusCode::OK, res.into())
 }
 
 const fn get_discussion_permissions(header: &'static Parts) -> RawPayload {
@@ -135,7 +311,7 @@ const fn get_discussion_permissions(header: &'static Parts) -> RawPayload {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct GetDiscussionRequest {
-    // locale: Option<CompactString>,
+    locale: Option<CompactString>,
     discussion_id: u32,
     #[serde(flatten)]
     query_replies_type: Option<QueryRepliesType>,
@@ -143,7 +319,7 @@ struct GetDiscussionRequest {
 }
 
 #[derive(Serialize)]
-struct Inner1 {
+struct Inner3 {
     meta: Discussion,
     content: CompactString,
     // problem,
@@ -152,12 +328,15 @@ struct Inner1 {
     permissions: [&'static str; 5],
 }
 
-struct Inner2<'a> {
+const PERMISSION_DEFAULT: [&str; 5] = ["View", "Modify", "ManagePermission", "ManagePublicness", "Delete"];
+
+struct Inner4<'a> {
     replies: &'a [DiscussionReply],
     lookup: &'a HashMap<CompactString, UserAOE>,
+    lookup2: &'a HashMap<i32, DiscussionReactionAOE>,
 }
 
-impl Serialize for Inner2<'_> {
+impl Serialize for Inner4<'_> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer
@@ -167,60 +346,66 @@ impl Serialize for Inner2<'_> {
             seq.serialize_element(&DiscussionReplyAOE {
                 reply,
                 publisher: self.lookup.get(&reply.publisher),
-                reactions: DiscussionReactionAOE::default(),
-                permissions: PERMISSION_DEFAULT,
+                reactions: self.lookup2.get(&(!reply.id).cast_signed()),
+                permissions: REPLY_PERMISSION_DEFAULT,
             })?;
         }
         seq.end()
     }
 }
 
-struct Inner3 {
+struct Inner5 {
     replies: Vec<DiscussionReply>,
     lookup: HashMap<CompactString, UserAOE>,
+    lookup2: HashMap<i32, DiscussionReactionAOE>,
     count: u64,
     split_at: usize,
 }
 
-impl Serialize for Inner3 {
+impl Serialize for Inner5 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer
     {
         let mut map = serializer.serialize_map(None)?;
         if self.split_at == usize::MAX {
-            map.serialize_entry("repliesInRange", &Inner2 {
+            map.serialize_entry("repliesInRange", &Inner4 {
                 replies: &self.replies,
                 lookup: &self.lookup,
+                lookup2: &self.lookup2,
             })?;
             map.serialize_entry("repliesCountInRange", &self.count)?;
         } else {
-            map.serialize_entry("repliesHead", &Inner2 {
+            map.serialize_entry("repliesHead", &Inner4 {
                 replies: unsafe { self.replies.get_unchecked(..self.split_at) },
                 lookup: &self.lookup,
+                lookup2: &self.lookup2,
             })?;
-            map.serialize_entry("repliesTail", &Inner2 {
+            map.serialize_entry("repliesTail", &Inner4 {
                 replies: unsafe { self.replies.get_unchecked(self.split_at..) },
                 lookup: &self.lookup,
+                lookup2: &self.lookup2,
             })?;
             map.serialize_entry("repliesInRange", &self.split_at)?;
         }
         map.end()
-       
     }
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct GetDiscussionResponse {
-    discussion: Option<Inner1>,
+    discussion: Option<Inner3>,
     #[serde(flatten)]
-    replies: Option<Inner3>,
+    replies: Option<Inner5>,
     permission_create_new_discussion: bool,
 }
 
-async fn get_discussion(req: JsonReqult<GetDiscussionRequest>) -> JkmxJsonResponse {
-    let Json(GetDiscussionRequest { discussion_id, query_replies_type, get_discussion }) = req?;
+async fn get_discussion(
+    Session_(session): Session_,
+    req: JsonReqult<GetDiscussionRequest>,
+) -> JkmxJsonResponse {
+    let Json(GetDiscussionRequest { locale, discussion_id, query_replies_type, get_discussion }) = req?;
 
     let mut res = GetDiscussionResponse {
         discussion: None,
@@ -228,7 +413,15 @@ async fn get_discussion(req: JsonReqult<GetDiscussionRequest>) -> JkmxJsonRespon
         permission_create_new_discussion: true,
     };
 
+    let 𝑘 = if get_discussion == Some(true) {
+        Some(discussion_id.cast_signed())
+    } else {
+        None
+    };
+
     let mut conn = get_connection().await?;
+    let maybe_user = User::from_maybe_session(&session, &mut conn).await?;
+    let uid = maybe_user.as_ref().map(|u| &*u.uid);
 
     match query_replies_type {
         Some(QueryRepliesType::HeadTail { head_take_count, tail_take_count }) => {
@@ -236,8 +429,10 @@ async fn get_discussion(req: JsonReqult<GetDiscussionRequest>) -> JkmxJsonRespon
             let tail = tail_take_count.min(50);
             let replies = DiscussionReply::stat_head_tail(discussion_id, head, tail, &mut conn).await?;
             let lookup = privilege::get_area_of_effect(replies.iter().map(|r| &*r.publisher), &mut conn).await?;
-            res.replies = Some(Inner3 {
+            let lookup2 = reaction_aoe(replies.iter().map(|r| (!r.id).cast_signed()).chain(𝑘), uid, &mut conn).await?;
+            res.replies = Some(Inner5 {
                 lookup,
+                lookup2,
                 count: replies.len() as u64,
                 split_at: replies.len().min(head as usize),
                 replies,
@@ -247,8 +442,10 @@ async fn get_discussion(req: JsonReqult<GetDiscussionRequest>) -> JkmxJsonRespon
             let count = id_range_take_count.min(100);
             let replies = DiscussionReply::stat_interval(discussion_id, before_id, after_id, count, &mut conn).await?;
             let lookup = privilege::get_area_of_effect(replies.iter().map(|r| &*r.publisher), &mut conn).await?;
-            res.replies = Some(Inner3 {
+            let lookup2 = reaction_aoe(replies.iter().map(|r| (!r.id).cast_signed()).chain(𝑘), uid, &mut conn).await?;
+            res.replies = Some(Inner5 {
                 lookup,
+                lookup2,
                 count: replies.len() as u64,
                 split_at: usize::MAX,
                 replies,
@@ -257,14 +454,20 @@ async fn get_discussion(req: JsonReqult<GetDiscussionRequest>) -> JkmxJsonRespon
         None => (),
     }
 
-    if get_discussion == Some(true) {
-        let Some((mut discussion, publisher)) = Discussion::by_id_aoe(discussion_id, &mut conn).await? else { return NO_SUCH_DISCUSSION };
+    if let Some(did) = 𝑘 {
+        let Some((mut discussion, publisher)) = Discussion::by_id_aoe(did.cast_unsigned(), &mut conn).await? else { return NO_SUCH_DISCUSSION };
+        discussion.backdoor(locale.as_deref());
         let content = mem::take(&mut discussion.content);
         let privi = privilege::all(&publisher.uid, &mut conn).await?;
-        if let Some(Inner3 { split_at: 0..usize::MAX, ref mut count, .. }) = res.replies {
+        if let Some(Inner5 { split_at: 0..usize::MAX, ref mut count, .. }) = res.replies {
             *count = discussion.reply_count.into();
         }
-        res.discussion = Some(Inner1 {
+        let reactions = if let Some(Inner5 { ref mut lookup2, .. }) = res.replies {
+            lookup2.remove(&did)
+        } else {
+            reaction_aoe(𝑘.into_iter(), uid, &mut conn).await?.remove(&did)
+        }.unwrap_or_default();
+        res.discussion = Some(Inner3 {
             meta: discussion,
             content,
             publisher: UserAOE {
@@ -274,12 +477,12 @@ async fn get_discussion(req: JsonReqult<GetDiscussionRequest>) -> JkmxJsonRespon
                 is_contest_admin: privi.iter().any(|p| p == "ManageContest"),
                 is_discussion_admin: privi.iter().any(|p| p == "ManageDiscussion"),
             },
-            reactions: DiscussionReactionAOE::default(),
-            permissions: ["View", "Modify", "ManagePermission", "ManagePublicness", "Delete"],
+            reactions,
+            permissions: PERMISSION_DEFAULT,
         });
     }
 
-    JkmxJsonResponse::Response(http::StatusCode::OK, serde_json::to_vec(&res)?.into())
+    JkmxJsonResponse::Response(StatusCode::OK, serde_json::to_vec(&res)?.into())
 }
 
 #[derive(Deserialize)]
@@ -304,15 +507,15 @@ async fn update_discussion(
     let Some(user) = User::from_maybe_session(&session, &mut conn).await? else { return JkmxJsonResponse::Response(StatusCode::UNAUTHORIZED, BYTES_NULL) };
 
     let n = if privilege::check(&user.uid, "Lean4OJ.ManageDiscussion", &mut conn).await? {
-        let stmt = conn.prepare_static(SQL.into()).await?;
+        let stmt = conn.prepare_static(SQL_PRIV.into()).await?;
         conn.execute(&stmt, &[&&*title, &&*content, &now, &discussion_id.cast_signed()]).await?
     } else {
-        let stmt = conn.prepare_static(SQL_PRIV.into()).await?;
+        let stmt = conn.prepare_static(SQL.into()).await?;
         conn.execute(&stmt, &[&&*title, &&*content, &now, &discussion_id.cast_signed(), &&*user.uid]).await?
     };
     if n != 1 { return private::err(); }
 
-    JkmxJsonResponse::Response(http::StatusCode::OK, BYTES_EMPTY)
+    JkmxJsonResponse::Response(StatusCode::OK, BYTES_EMPTY)
 }
 
 #[derive(Deserialize)]
@@ -349,7 +552,7 @@ async fn update_reply(
     if n != 1 { return private::err(); }
 
     let res = format!(r#"{{"editTime":{}}}"#, get_millis(now));
-    JkmxJsonResponse::Response(http::StatusCode::OK, res.into())
+    JkmxJsonResponse::Response(StatusCode::OK, res.into())
 }
 
 #[derive(Deserialize)]
@@ -379,7 +582,7 @@ async fn delete_discussion(
     };
     if n != 1 { return private::err(); }
 
-    JkmxJsonResponse::Response(http::StatusCode::OK, BYTES_EMPTY)
+    JkmxJsonResponse::Response(StatusCode::OK, BYTES_EMPTY)
 }
 
 #[derive(Deserialize)]
@@ -417,15 +620,14 @@ async fn delete_reply(
     if n != 1 { return private::err(); }
     txn.commit().await?;
 
-    JkmxJsonResponse::Response(http::StatusCode::OK, BYTES_EMPTY)
+    JkmxJsonResponse::Response(StatusCode::OK, BYTES_EMPTY)
 }
-
-
 
 pub fn router(header: &'static Parts) -> Router {
     Router::new()
         .route("/createDiscussion", post(create_discussion))
         .route("/createDiscussionReply", post(create_reply))
+        .route("/toggleReaction", post(reaction))
         .route("/queryDiscussion", post(query_discussions))
         .route("/getDiscussionPermissions", post_service(get_discussion_permissions(header)))
         .route("/getDiscussionAndReplies", post(get_discussion))

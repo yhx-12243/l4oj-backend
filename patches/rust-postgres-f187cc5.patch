@@ -352,7 +352,7 @@ index 8126b1db..f2ca0de6 100644
      }
  
 diff --git a/tokio-postgres/Cargo.toml b/tokio-postgres/Cargo.toml
-index 4db1ca60..a8db8856 100644
+index 00af1bc2..cb515750 100644
 --- a/tokio-postgres/Cargo.toml
 +++ b/tokio-postgres/Cargo.toml
 @@ -2,14 +2,14 @@

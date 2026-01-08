@@ -26,7 +26,7 @@ use crate::{
     models::user::{User, UserA, UserInformation},
 };
 
-pub const NO_SUCH_USER: JkmxJsonResponse = JkmxJsonResponse::Response(
+const NO_SUCH_USER: JkmxJsonResponse = JkmxJsonResponse::Response(
     StatusCode::OK,
     Bytes::from_static(br#"{"error":"NO_SUCH_USER"}"#),
 );
@@ -124,9 +124,9 @@ async fn update_user_profile(
 ) -> JkmxJsonResponse {
     const SQL_UPDATE_USER: &str = "update lean4oj.users set username = $1, email = $2, avatar_info = $3, nickname = $4, bio = $5 where uid = $6";
     const SQL_UPDATE_INFORMATION: &str = "update lean4oj.user_information set organization = $1, location = $2, url = $3, telegram = $4, qq = $5, github = $6 where uid = $7";
-   
+
     let Json(UpdateUserProfileRequest { user_id, username, email, avatar_info, nickname, bio, information }) = req?;
-   
+
     if !check_username(&username) { bad!(BYTES_NULL) }
 
     let mut conn = get_connection().await?;
@@ -163,7 +163,7 @@ async fn get_user_list(req: JsonReqult<GetUserListRequest>) -> JkmxJsonResponse 
     let users = User::list(skip, take, &mut conn).await?;
     let count = User::count(&mut conn).await?;
 
-    let res = format!(r#"{{"count":{count},"userMetas":{}}}"#, WithJson(users));
+    let res = format!(r#"{{"userMetas":{},"count":{count}}}"#, WithJson(users));
     JkmxJsonResponse::Response(StatusCode::OK, res.into())
 }
 

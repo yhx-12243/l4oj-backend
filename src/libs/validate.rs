@@ -4,8 +4,12 @@ use pcre2::bytes::{Regex, RegexBuilder};
 
 use super::util::unescape_quoted;
 
+pub const fn check_username_u8(ch: u8) -> bool {
+    matches!(ch, b'#' | b'$' | b'-' | b'.' | b'0'..=b'9' | b'A'..=b'Z' | b'_' | b'a'..=b'z')
+}
+
 pub fn check_username(username: &str) -> bool {
-    3 <= username.len() && username.len() <= 24 && username.bytes().all(|x| matches!(x, b'#' | b'$' | b'-' | b'.' | b'0'..=b'9' | b'A'..=b'Z' | b'_' | b'a'..=b'z'))
+    3 <= username.len() && username.len() <= 24 && username.bytes().all(check_username_u8)
 }
 
 pub const fn is_admin_group(groupname: &str) -> bool {
@@ -20,8 +24,12 @@ pub const fn is_system_group(groupname: &str) -> bool {
     }
 }
 
+pub const fn check_groupname_u8(ch: u8) -> bool {
+    matches!(ch, b' ' | b'#' | b'$' | b'-'..=b':' | b'@'..=b'Z' | b'_' | b'a'..=b'z' | b'~' )
+}
+
 pub fn check_groupname(groupname: &str) -> bool {
-    !groupname.is_empty() && groupname.len() <= 48 && !is_system_group(groupname) && groupname.bytes().all(|x| matches!(x, b' ' | b'#' | b'$' | b'-'..=b':' | b'@'..=b'Z' | b'_' | b'a'..=b'z' | b'~' ))
+    !groupname.is_empty() && groupname.len() <= 48 && !is_system_group(groupname) && groupname.bytes().all(check_groupname_u8)
 }
 
 pub fn is_lean_id_first(ch: char) -> bool {

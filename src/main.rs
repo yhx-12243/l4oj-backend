@@ -133,6 +133,7 @@ async fn main() -> std::io::Result<!> {
 
     libs::auth::init();
     libs::db::init_db().await;
+    libs::emoji::init();
     libs::logger::init();
     libs::olean::init();
     libs::session::init();

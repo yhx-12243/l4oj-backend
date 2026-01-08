@@ -18,6 +18,16 @@ impl LocaleDict {
             ""
         }
     }
+
+    pub fn apply_owned(mut self, locale: Option<&str>) -> Option<CompactString> {
+        if let Some(locale) = locale && let Some(res) = self.0.remove(locale) {
+            Some(res)
+        } else if let Some(res) = self.0.remove("zh_CN") {
+            Some(res)
+        } else {
+            self.0.into_values().next()
+        }
+    }
 }
 
 #[derive(Serialize)]

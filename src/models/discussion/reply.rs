@@ -59,7 +59,7 @@ impl TryFrom<Row> for Reply {
 
 impl Reply {
     pub async fn stat_head_tail(did: u32, head: u64, tail: u64, db: &mut Client) -> DBResult<Vec<Self>> {
-        const SQL: &str = "(select id, content, publish, edit, did, publisher from lean4oj.discussion_replies where did = $1 order by id limit $2::int4) union (select * from lean4oj.discussion_replies where did = $1 order by id desc limit $3::int4) order by id";
+        const SQL: &str = "(select id, content, publish, edit, did, publisher from lean4oj.discussion_replies where did = $1 order by id limit $2::integer) union (select * from lean4oj.discussion_replies where did = $1 order by id desc limit $3::integer) order by id";
 
         let stmt = db.prepare_static(SQL.into()).await?;
         let rows = db.query_raw(&stmt, [did.cast_signed(), head as i32, tail as i32]).await?;
@@ -67,7 +67,7 @@ impl Reply {
     }
 
     pub async fn stat_interval(did: u32, before: u32, after: u32, count: u64, db: &mut Client) -> DBResult<Vec<Self>> {
-        const SQL: &str = "select id, content, publish, edit, did, publisher from lean4oj.discussion_replies where did = $1 and id > $2 and id < $3 order by id limit $4::int4";
+        const SQL: &str = "select id, content, publish, edit, did, publisher from lean4oj.discussion_replies where did = $1 and id > $2 and id < $3 order by id limit $4::integer";
 
         let stmt = db.prepare_static(SQL.into()).await?;
         let rows = db.query_raw(&stmt, [did.cast_signed(), after.cast_signed(), before.cast_signed(), count as i32]).await?;
@@ -80,7 +80,7 @@ pub struct ReplyAOE<'a> {
     #[serde(flatten)]
     pub reply: &'a Reply,
     pub publisher: Option<&'a UserAOE>,
-    pub reactions: DiscussionReactionAOE,
+    pub reactions: Option<&'a DiscussionReactionAOE>,
     pub permissions: [&'static str; 3],
 }
 
