@@ -17,9 +17,10 @@ use smallvec::SmallVec;
 use tokio_postgres::types::ToSql;
 
 use crate::{
+    exs,
     libs::{
         auth::Session_,
-        constants::{BYTES_EMPTY, BYTES_NULL},
+        constants::BYTES_EMPTY,
         db::{DBError, get_connection},
         emoji, privilege,
         request::{JsonReqult, RawPayload},
@@ -81,7 +82,7 @@ async fn create_discussion(
     let Json(CreateDiscussionRequest { title, content, .. }) = req?;
 
     let mut conn = get_connection().await?;
-    let Some(user) = User::from_maybe_session(&session, &mut conn).await? else { return JkmxJsonResponse::Response(StatusCode::UNAUTHORIZED, BYTES_NULL) };
+    exs!(user, &session, &mut conn);
 
     let id = Discussion::create(&title, &content, now, &user.uid, &mut conn).await?;
     let res = format!(r#"{{"discussionId":{id}}}"#);
@@ -106,7 +107,7 @@ async fn create_reply(
     let Json(CreateReplyRequest { discussion_id, content }) = req?;
 
     let mut conn = get_connection().await?;
-    let Some(user) = User::from_maybe_session(&session, &mut conn).await? else { return JkmxJsonResponse::Response(StatusCode::UNAUTHORIZED, BYTES_NULL) };
+    exs!(user, &session, &mut conn);
 
     let stmt_create_reply = conn.prepare_static(SQL_CREATE_REPLY.into()).await?;
     let stmt_update_parent = conn.prepare_static(SQL_UPDATE_PARENT.into()).await?;
@@ -166,7 +167,7 @@ async fn reaction(
     let Some(emoji) = emoji::normalize(&emoji) else { return INVALID_EMOJI };
 
     let mut conn = get_connection().await?;
-    let Some(user) = User::from_maybe_session(&session, &mut conn).await? else { return JkmxJsonResponse::Response(StatusCode::UNAUTHORIZED, BYTES_NULL) };
+    exs!(user, &session, &mut conn);
 
     let eid = match ty {
         DiscussionReactionType::Discussion => {
@@ -504,7 +505,7 @@ async fn update_discussion(
     let Json(UpdateDiscussionRequest { discussion_id, title, content }) = req?;
 
     let mut conn = get_connection().await?;
-    let Some(user) = User::from_maybe_session(&session, &mut conn).await? else { return JkmxJsonResponse::Response(StatusCode::UNAUTHORIZED, BYTES_NULL) };
+    exs!(user, &session, &mut conn);
 
     let n = if privilege::check(&user.uid, "Lean4OJ.ManageDiscussion", &mut conn).await? {
         let stmt = conn.prepare_static(SQL_PRIV.into()).await?;
@@ -537,7 +538,7 @@ async fn update_reply(
     let Json(UpdateReplyRequest { discussion_reply_id, content }) = req?;
 
     let mut conn = get_connection().await?;
-    let Some(user) = User::from_maybe_session(&session, &mut conn).await? else { return JkmxJsonResponse::Response(StatusCode::UNAUTHORIZED, BYTES_NULL) };
+    exs!(user, &session, &mut conn);
 
     let row = if privilege::check(&user.uid, "Lean4OJ.ManageDiscussion", &mut conn).await? {
         let stmt = conn.prepare_static(SQL_PRIV.into()).await?;
@@ -571,7 +572,7 @@ async fn delete_discussion(
     let Json(DeleteDiscussionRequest { discussion_id }) = req?;
 
     let mut conn = get_connection().await?;
-    let Some(user) = User::from_maybe_session(&session, &mut conn).await? else { return JkmxJsonResponse::Response(StatusCode::UNAUTHORIZED, BYTES_NULL) };
+    exs!(user, &session, &mut conn);
 
     let n = if privilege::check(&user.uid, "Lean4OJ.ManageDiscussion", &mut conn).await? {
         let stmt = conn.prepare_static(SQL_PRIV.into()).await?;
@@ -602,7 +603,7 @@ async fn delete_reply(
     let Json(DeleteReplyRequest { discussion_reply_id }) = req?;
 
     let mut conn = get_connection().await?;
-    let Some(user) = User::from_maybe_session(&session, &mut conn).await? else { return JkmxJsonResponse::Response(StatusCode::UNAUTHORIZED, BYTES_NULL) };
+    exs!(user, &session, &mut conn);
 
     let txn;
     let stmt_p = conn.prepare_static(SQL_UPDATE_PARENT.into()).await?;

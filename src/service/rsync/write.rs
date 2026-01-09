@@ -27,7 +27,8 @@ use tokio::{
 };
 
 use super::{
-    file_entry::FileEntry, io::ReadVarintRsync, jumping::Jumping, multiplex::c2s_multiplex,
+    file_entry::FileEntry, io::ReadVarintRsync, jumping::Jumping, mode::Mode,
+    multiplex::c2s_multiplex,
 };
 use crate::{
     libs::{
@@ -44,6 +45,8 @@ use crate::{
 const SINGLE_FILE_LIMIT: usize = 0x100_0000; // 16 MB
 const TOTAL_FILE_LIMIT: usize = 0x4000_0000; // 1 GB
 const TOTAL_FILE_NUM: usize = 0x10_0000; // 1 M
+
+const TOTAL_EXCEEDED: &str = "Total file size limit exceeds 1 GB. Please contact server administrator for a larger capacity.";
 
 fn check_prefix(prefix: &[u8]) -> bool {
     const B: &[u8] = b"/.lake/build/lib/lean";
@@ -84,7 +87,7 @@ fn check_path(path: &[u8], uid_with_slash: &str) -> usize {
     }
 }
 
-async fn generate_file_list<R>(mut rx: R, uid_with_slash: &str, limit: usize) -> Result<Vec<FileEntry>, BoxedStdError>
+async fn generate_file_list<R>(mut rx: R, uid_with_slash: &str, limit: usize) -> Result<(Vec<FileEntry>, usize), BoxedStdError>
 where
     R: AsyncRead + Unpin,
 {
@@ -97,7 +100,7 @@ where
         let flag = rx.read_varint::<0>().await?;
         if flag == 0 {
             return match rx.read_varint::<0>().await? {
-                0 => Ok(ret),
+                0 => Ok((ret, acc)),
                 e => Err(format!("invalid end byte: {e}").into()),
             };
         }
@@ -141,9 +144,7 @@ where
                     enabled = check_path(&s, uid_with_slash);
                     if enabled != 0 {
                         acc += size as usize;
-                        if acc > limit {
-                            return Err("Total file size limit exceeds 1 GB. Please contact server administrator for a larger capacity.".into());
-                        }
+                        if acc > limit { return Err(TOTAL_EXCEEDED.into()); }
                     }
                 }
             }
@@ -178,10 +179,12 @@ fn do_delete(
     cwd: &mut PathBuf,
     exempt: &HashSet<&[u8]>,
     dir: RawFd,
+    mode: Mode,
     readdir: &mut ReadDir,
 ) -> io::Result<(usize, bool)> {
     let mut delcnt = 0;
     let mut alived = false;
+    let mut stat = MaybeUninit::<libc::stat>::uninit();
     let base_len = cwd.as_os_str().len();
     for entry in readdir {
         let entry = entry?;
@@ -192,23 +195,27 @@ fn do_delete(
         if type_.is_dir() {
             let fd = unsafe { libc::openat(dir, pname.cast(), libc::O_DIRECTORY) };
             if fd == -1 { return Err(io::Error::last_os_error()); }
-            let (sub_delcnt, sub_alived) = do_delete(cwd, exempt, fd, &mut readdir_from_rawfd(fd)?)?;
+            let (sub_delcnt, sub_alived) = do_delete(cwd, exempt, fd, mode, &mut readdir_from_rawfd(fd)?)?;
             delcnt += sub_delcnt;
             if sub_alived {
                 alived = true;
-            } else {
-                if unsafe { libc::unlinkat(dir, pname.cast(), libc::AT_REMOVEDIR) } != 0 {
-                    return Err(io::Error::last_os_error());
-                }
+            } else if mode == Mode::Write {
+                if unsafe { libc::unlinkat(dir, pname.cast(), libc::AT_REMOVEDIR) } != 0 { return Err(io::Error::last_os_error()); }
                 delcnt += 1;
             }
         } else if exempt.contains(cwd.as_os_str().as_encoded_bytes()) {
             alived = true;
         } else {
-            if unsafe { libc::unlinkat(dir, pname.cast(), 0) } != 0 {
-                return Err(io::Error::last_os_error());
+            match mode {
+                Mode::Read => #[allow(clippy::cast_sign_loss)] {
+                    if unsafe { libc::fstatat(dir, pname.cast(), stat.as_mut_ptr(), 0) } != 0 { return Err(io::Error::last_os_error()); }
+                    delcnt += unsafe { stat.assume_init_ref() }.st_size as usize;
+                }
+                Mode::Write => {
+                    if unsafe { libc::unlinkat(dir, pname.cast(), 0) } != 0 { return Err(io::Error::last_os_error()); }
+                    delcnt += 1;
+                }
             }
-            delcnt += 1;
         }
         cwd.as_mut_os_string().truncate(base_len);
     }
@@ -336,7 +343,7 @@ pub async fn main(
         }
     };
     let mut buf = format!(env!("OLEAN_ROOT"), user.uid);
-    let mut fl = generate_file_list(
+    let (mut fl, acc) = generate_file_list(
         &mut rx,
         unsafe { buf.get_unchecked(const { env!("OLEAN_ROOT").len() - 4 }..) },
         limit,
@@ -352,19 +359,22 @@ pub async fn main(
     let base_dir_fd = unsafe { libc::open(buf.as_ptr().cast(), libc::O_DIRECTORY) };
     if base_dir_fd == -1 { return Err(io::Error::last_os_error().into()); }
 
-    let exempt = if delete {
+    let exempt = {
         use std::slice::SliceIndex;
         fl.iter()
             .filter_map(|entry| (entry.enabled != 0).then_some(
                 unsafe { &*(entry.enabled..).get_unchecked(&raw const *entry.path) }
             ))
             .collect::<HashSet<_>>()
-    } else {
-        HashSet::new()
     };
 
     // This fd is now managed by 🌰!
     let mut chestnut = readdir_from_rawfd(base_dir_fd)?;
+
+    if !delete {
+        let acc2 = do_delete(&mut PathBuf::new(), &exempt, base_dir_fd, Mode::Read, &mut chestnut)?.0;
+        if acc + acc2 > limit { return Err(TOTAL_EXCEEDED.into()); }
+    }
 
     let mut state = Jumping::default();
     let mut buf = Vec::new();
@@ -401,7 +411,7 @@ pub async fn main(
     s2c.flush().await?;
 
     let delcnt = if delete {
-        do_delete(&mut PathBuf::new(), &exempt, base_dir_fd, &mut chestnut)?.0
+        do_delete(&mut PathBuf::new(), &exempt, base_dir_fd, Mode::Write, &mut chestnut)?.0
     } else {
         0
     };

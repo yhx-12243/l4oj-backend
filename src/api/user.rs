@@ -12,7 +12,7 @@ use smallvec::SmallVec;
 use tokio_postgres::{Client, types::Json as QJson};
 
 use crate::{
-    bad,
+    bad, exs,
     libs::{
         auth::Session_,
         constants::{BYTES_EMPTY, BYTES_NULL, PASSWORD_LENGTH},
@@ -130,7 +130,7 @@ async fn update_user_profile(
     if !check_username(&username) { bad!(BYTES_NULL) }
 
     let mut conn = get_connection().await?;
-    let Some(s_user) = User::from_maybe_session(&session, &mut conn).await? else { return JkmxJsonResponse::Response(StatusCode::UNAUTHORIZED, BYTES_NULL) };
+    exs!(s_user, &session, &mut conn);
     let Some(t_user) = User::by_uid(&user_id, &mut conn).await? else { return NO_SUCH_USER };
     if !private::γ(&s_user.uid, &t_user.uid, &mut conn).await? {
         return JkmxJsonResponse::Response(StatusCode::FORBIDDEN, BYTES_NULL);
@@ -239,7 +239,7 @@ async fn get_user_preference(
     let Json(GetSingleUserRequest { uid }) = req?;
 
     let mut conn = get_connection().await?;
-    let Some(s_user) = User::from_maybe_session(&session, &mut conn).await? else { return JkmxJsonResponse::Response(StatusCode::UNAUTHORIZED, BYTES_NULL) };
+    exs!(s_user, &session, &mut conn);
     let Some(t_user) = User::by_uid(&uid, &mut conn).await? else { return NO_SUCH_USER };
     if !private::γ(&s_user.uid, &t_user.uid, &mut conn).await? {
         return JkmxJsonResponse::Response(StatusCode::FORBIDDEN, BYTES_NULL);
@@ -269,7 +269,7 @@ async fn update_user_preference(
     let Json(UpdateUserPreferenceRequest { user_id, preference }) = req?;
 
     let mut conn = get_connection().await?;
-    let Some(s_user) = User::from_maybe_session(&session, &mut conn).await? else { return JkmxJsonResponse::Response(StatusCode::UNAUTHORIZED, BYTES_NULL) };
+    exs!(s_user, &session, &mut conn);
     let Some(t_user) = User::by_uid(&user_id, &mut conn).await? else { return NO_SUCH_USER };
     if !private::γ(&s_user.uid, &t_user.uid, &mut conn).await? {
         return JkmxJsonResponse::Response(StatusCode::FORBIDDEN, BYTES_NULL);
@@ -315,7 +315,7 @@ async fn update_password(
     if password.len() != PASSWORD_LENGTH || !password.is_ascii() { bad!(BYTES_NULL) }
 
     let mut conn = get_connection().await?;
-    let Some(s_user) = User::from_maybe_session(&session, &mut conn).await? else { return JkmxJsonResponse::Response(StatusCode::UNAUTHORIZED, BYTES_NULL) };
+    exs!(s_user, &session, &mut conn);
     let Some(t_user) = User::by_uid(&user_id, &mut conn).await? else { return NO_SUCH_USER };
     if !private::λ(
         &s_user.uid,
@@ -348,7 +348,7 @@ async fn update_email(
     if check_email(&email).is_none() { bad!(BYTES_NULL) }
 
     let mut conn = get_connection().await?;
-    let Some(user) = User::from_maybe_session(&session, &mut conn).await? else { return JkmxJsonResponse::Response(StatusCode::UNAUTHORIZED, BYTES_NULL) };
+    exs!(user, &session, &mut conn);
 
     let stmt = conn.prepare_static(SQL.into()).await?;
     let n = conn.execute(&stmt, &[&&*email, &&*user.uid]).await?;

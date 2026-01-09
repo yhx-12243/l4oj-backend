@@ -1,3 +1,5 @@
+use core::ops::Deref;
+
 use compact_str::CompactString;
 use hashbrown::HashMap;
 use serde::{Deserialize, Serialize, ser::SerializeSeq};
@@ -12,10 +14,8 @@ impl LocaleDict {
             res
         } else if let Some(res) = self.0.get("zh_CN") {
             res
-        } else if let Some(res) = self.0.values().next() {
-            res
         } else {
-            ""
+            self.0.values().next().map_or_default(Deref::deref)
         }
     }
 

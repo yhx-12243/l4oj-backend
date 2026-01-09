@@ -18,7 +18,7 @@ struct UnsupportedReadError {
 
 impl fmt::Display for UnsupportedReadError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Please use `wget -r -nH -np -R 'index.html,index.html.tmp' '{}/lean/{}/'` (no backticks) to download files.", self.sni, self.uid)
+        write!(f, "Please use `wget -e robots=off -r -l 0 -nH -np --cut-dirs=1 -R 'index.html,index.html.tmp' '{}/lean/{}/'` (no backticks) to download files.", self.sni, self.uid)
     }
 }
 

@@ -9,7 +9,7 @@ use serde_json::ser::Serializer as JSerializer;
 use tokio_postgres::Client;
 
 use crate::{
-    bad,
+    bad, exs,
     libs::{
         auth::Session_,
         constants::{BYTES_EMPTY, BYTES_NULL},
@@ -18,11 +18,10 @@ use crate::{
         response::JkmxJsonResponse,
         serde::WithJson,
         validate::{check_groupname, is_admin_group, is_system_group},
-    },
-    models::{
+    }, models::{
         group::{AUV, Group, GroupA},
         user::User,
-    },
+    }
 };
 
 mod private {
@@ -80,7 +79,7 @@ async fn create_group(
     if !check_groupname(&group_name) { bad!(BYTES_NULL) }
 
     let mut conn = get_connection().await?;
-    let Some(user) = User::from_maybe_session(&session, &mut conn).await? else { return JkmxJsonResponse::Response(StatusCode::UNAUTHORIZED, BYTES_NULL) };
+    exs!(user, &session, &mut conn);
     // if !privilege::check(&user.uid, "Lean4OJ.ManageUserGroup", &mut conn).await? { return JkmxJsonResponse::Response(StatusCode::FORBIDDEN, BYTES_NULL); }
 
     let stmt_create = conn.prepare_static(SQL_CREATE_GROUP.into()).await?;
@@ -113,7 +112,7 @@ async fn add_member(
     let Json(UidGidRequest { user_id, group_id }) = req?;
 
     let mut conn = get_connection().await?;
-    let Some(s_user) = User::from_maybe_session(&session, &mut conn).await? else { return JkmxJsonResponse::Response(StatusCode::UNAUTHORIZED, BYTES_NULL) };
+    exs!(s_user, &session, &mut conn);
     if !private::μ(&s_user.uid, &group_id, false, &mut conn).await? { return JkmxJsonResponse::Response(StatusCode::FORBIDDEN, BYTES_NULL); }
 
     let stmt_add = conn.prepare_static(SQL_ADD.into()).await?;
@@ -138,7 +137,7 @@ async fn remove_member(
     let Json(UidGidRequest { user_id, group_id }) = req?;
 
     let mut conn = get_connection().await?;
-    let Some(s_user) = User::from_maybe_session(&session, &mut conn).await? else { return JkmxJsonResponse::Response(StatusCode::UNAUTHORIZED, BYTES_NULL) };
+    exs!(s_user, &session, &mut conn);
     if !private::μ(&s_user.uid, &group_id, false, &mut conn).await? { return JkmxJsonResponse::Response(StatusCode::FORBIDDEN, BYTES_NULL); }
 
     let stmt_remove = conn.prepare_static(SQL_REMOVE.into()).await?;
@@ -170,7 +169,7 @@ async fn set_group_admin(
     let Json(SetGroupAdminRequest { user_id, group_id, is_group_admin }) = req?;
 
     let mut conn = get_connection().await?;
-    let Some(s_user) = User::from_maybe_session(&session, &mut conn).await? else { return JkmxJsonResponse::Response(StatusCode::UNAUTHORIZED, BYTES_NULL) };
+    exs!(s_user, &session, &mut conn);
     let Some(t_user) = User::by_uid(&user_id, &mut conn).await? else { return JkmxJsonResponse::Response(StatusCode::NOT_FOUND, BYTES_NULL) };
     if !private::μ(&s_user.uid, &group_id, *s_user.uid == *t_user.uid, &mut conn).await? { return JkmxJsonResponse::Response(StatusCode::FORBIDDEN, BYTES_NULL); }
 

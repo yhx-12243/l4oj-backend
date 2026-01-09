@@ -15,10 +15,7 @@ use crate::{
         response::JkmxJsonResponse,
         serde::SliceMap,
     },
-    models::{
-        discussion::Discussion,
-        user::User,
-    },
+    models::{discussion::Discussion, user::User},
 };
 
 #[repr(transparent)]
@@ -67,6 +64,8 @@ struct HomepageRequest {
     locale: Option<CompactString>,
 }
 
+const ANNOUNCEMENT_IDS: [u32; 3] = [1, 2, 3];
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct HomepageResponse<'a> {
@@ -88,7 +87,7 @@ async fn get_homepage(req: Repult<Query<HomepageRequest>>) -> JkmxJsonResponse {
         &mut conn,
     ).await?;
 
-    let mut announcements = Discussion::by_ids([1, 6, 3, 8, 7].into_iter(), &mut conn).await?;
+    let mut announcements = Discussion::by_ids(ANNOUNCEMENT_IDS.into_iter(), &mut conn).await?;
     for d in &mut announcements { d.backdoor(locale.as_deref()); }
     let links = links::friend_links(locale.as_deref());
     let res = HomepageResponse {
