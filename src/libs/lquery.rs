@@ -1,3 +1,6 @@
+use core::index::Last;
+use std::borrow::Cow;
+
 use compact_str::CompactString;
 
 use crate::libs::validate::{check_username_u8, is_lean_id_first, is_lean_id_rest};
@@ -78,4 +81,46 @@ pub fn normalize(raw: &str) -> Option<(bool, CompactString)> {
     } else {
         normalize_ul(raw.as_bytes()).map(|r| (false, r))
     }
+}
+
+#[inline]
+pub const fn 𝑛𝑒𝑒𝑑_𝑒𝑠𝑐𝑎𝑝𝑒(x: u8) -> bool { matches!(x, b'%' | b'\\' | b'_') }
+
+pub fn 𝑒𝑠𝑐𝑎𝑝𝑒(s: &str) -> String {
+    let c = s.bytes().filter(|&x| 𝑛𝑒𝑒𝑑_𝑒𝑠𝑐𝑎𝑝𝑒(x)).count();
+    let mut buf = Vec::with_capacity(s.len() + c + 2);
+    buf.push(b'%');
+    for b in s.bytes() {
+        if 𝑛𝑒𝑒𝑑_𝑒𝑠𝑐𝑎𝑝𝑒(b) { buf.push(b'\\'); }
+        buf.push(b);
+    }
+    buf.push(b'%');
+    unsafe { String::from_utf8_unchecked(buf) }
+}
+
+pub fn 𝑒𝑠𝑐𝑎𝑝𝑒_𝚛𝚊𝚠(s: &str) -> Cow<'_, str> {
+    let c = s.bytes().filter(|&x| 𝑛𝑒𝑒𝑑_𝑒𝑠𝑐𝑎𝑝𝑒(x)).count();
+    if c == 0 { return Cow::Borrowed(s); }
+    let mut buf = Vec::with_capacity(s.len() + c);
+    for b in s.bytes() {
+        if 𝑛𝑒𝑒𝑑_𝑒𝑠𝑐𝑎𝑝𝑒(b) { buf.push(b'\\'); }
+        buf.push(b);
+    }
+    unsafe { Cow::Owned(String::from_utf8_unchecked(buf)) }
+}
+
+pub fn 𝑒𝑠𝑐𝑎𝑝𝑒_𝚕𝚊𝚣𝚢(s: &str) -> Option<Cow<'_, str>> {
+    if s.len() < 3 && s.bytes().all(|x| x == b'*') { return None; }
+    let mut t = 𝑒𝑠𝑐𝑎𝑝𝑒_𝚛𝚊𝚠(s);
+    if t.starts_with('*') {
+        unsafe {
+            *t.to_mut().as_mut_vec().get_unchecked_mut(0) = b'%';
+        }
+    }
+    if t.ends_with('*') {
+        unsafe {
+            *t.to_mut().as_mut_vec().get_unchecked_mut(Last) = b'%';
+        }
+    }
+    Some(t)
 }

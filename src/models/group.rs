@@ -2,7 +2,7 @@ use core::future::ready;
 
 use compact_str::CompactString;
 use futures_util::TryStreamExt;
-use serde::{Serialize, ser::SerializeStruct};
+use serde::{Serialize, ser::SerializeMap};
 use tokio_postgres::{Client, Row, types::ToSql};
 
 use crate::{
@@ -20,11 +20,11 @@ impl Serialize for Group {
     where
         S: serde::Serializer,
     {
-        let mut state = serializer.serialize_struct("Group", 3)?;
-        state.serialize_field("id", &*self.gid)?;
-        state.serialize_field("name", &*self.gid)?;
-        state.serialize_field("memberCount", &self.member_count)?;
-        state.end()
+        let mut map = serializer.serialize_map(Some(3))?;
+        map.serialize_entry("id", &*self.gid)?;
+        map.serialize_entry("name", &*self.gid)?;
+        map.serialize_entry("memberCount", &self.member_count)?;
+        map.end()
     }
 }
 
@@ -44,6 +44,14 @@ impl Group {
 
         let stmt = db.prepare_static(SQL.into()).await?;
         let stream = db.query_raw(&stmt, core::iter::empty::<&dyn ToSql>()).await?;
+        stream.and_then(|row| ready(Self::try_from(row))).try_collect().await
+    }
+
+    pub async fn search(query: &str, db: &mut Client) -> DBResult<Vec<Self>> {
+        const SQL: &str = "select gid, member_count from lean4oj.groups where gid like $1 order by gid limit 10";
+
+        let stmt = db.prepare_static(SQL.into()).await?;
+        let stream = db.query_raw(&stmt, [query]).await?;
         stream.and_then(|row| ready(Self::try_from(row))).try_collect().await
     }
 }
@@ -88,7 +96,7 @@ impl GroupA {
 
         let stmt = db.prepare_static(SQL.into()).await?;
         let row = db.query_one(&stmt, &[&uid]).await?;
-        Ok(row.try_get::<_, i64>(0)?.cast_unsigned())
+        row.try_get(0).map(i64::cast_unsigned)
     }
 }
 

@@ -1,5 +1,6 @@
 use axum::{
     Json, Router,
+    extract::Query,
     routing::{get, post},
 };
 use compact_str::CompactString;
@@ -14,14 +15,16 @@ use crate::{
         auth::Session_,
         constants::{BYTES_EMPTY, BYTES_NULL},
         db::{DBError, DBResult, get_connection},
-        request::JsonReqult,
+        lquery::𝑒𝑠𝑐𝑎𝑝𝑒_𝚕𝚊𝚣𝚢,
+        request::{JsonReqult, Repult},
         response::JkmxJsonResponse,
         serde::WithJson,
         validate::{check_groupname, is_admin_group, is_system_group},
-    }, models::{
+    },
+    models::{
         group::{AUV, Group, GroupA},
         user::User,
-    }
+    },
 };
 
 mod private {
@@ -62,6 +65,23 @@ mod private {
 }
 
 #[derive(Deserialize)]
+struct SearchGroupRequest {
+    query: CompactString,
+}
+
+async fn search_group(req: Repult<Query<SearchGroupRequest>>) -> JkmxJsonResponse {
+    let Query(SearchGroupRequest { query }) = req?;
+
+    let Some(query) = 𝑒𝑠𝑐𝑎𝑝𝑒_𝚕𝚊𝚣𝚢(&query) else { bad!(BYTES_NULL) };
+
+    let mut conn = get_connection().await?;
+    let groups = Group::search(&query, &mut conn).await?;
+
+    let res = format!(r#"{{"groupMetas":{}}}"#, WithJson(groups));
+    JkmxJsonResponse::Response(StatusCode::OK, res.into())
+}
+
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CreateGroupRequest {
     group_name: CompactString,
@@ -93,6 +113,61 @@ async fn create_group(
 
     let res = format!(r#"{{"groupId":"{group_name}"}}"#);
     JkmxJsonResponse::Response(StatusCode::OK, res.into())
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeleteGroupRequest {
+    group_id: CompactString,
+}
+
+async fn delete_group(
+    Session_(session): Session_,
+    req: JsonReqult<DeleteGroupRequest>,
+) -> JkmxJsonResponse {
+    const SQL: &str = "delete from lean4oj.groups where gid = $1";
+
+    let Json(DeleteGroupRequest { group_id }) = req?;
+
+    if !check_groupname(&group_id) { bad!(BYTES_NULL) }
+
+    let mut conn = get_connection().await?;
+    exs!(s_user, &session, &mut conn);
+    if !private::μ(&s_user.uid, &group_id, false, &mut conn).await? { return JkmxJsonResponse::Response(StatusCode::FORBIDDEN, BYTES_NULL); }
+
+    let stmt = conn.prepare_static(SQL.into()).await?;
+    let n = conn.execute(&stmt, &[&&*group_id]).await?;
+    if n != 1 { return private::err(); }
+
+    JkmxJsonResponse::Response(StatusCode::OK, BYTES_EMPTY)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RenameGroupRequest {
+    group_id: CompactString,
+    name: CompactString,
+}
+
+async fn rename_group(
+    Session_(session): Session_,
+    req: JsonReqult<RenameGroupRequest>,
+) -> JkmxJsonResponse {
+    const SQL: &str = "update lean4oj.groups set gid = $1 where gid = $2";
+
+    let Json(RenameGroupRequest { group_id, name }) = req?;
+
+    if !(check_groupname(&group_id) && check_groupname(&name)) { bad!(BYTES_NULL) }
+
+    let mut conn = get_connection().await?;
+    exs!(s_user, &session, &mut conn);
+    if !private::μ(&s_user.uid, &group_id, false, &mut conn).await? { return JkmxJsonResponse::Response(StatusCode::FORBIDDEN, BYTES_NULL); }
+
+    let stmt = conn.prepare_static(SQL.into()).await?;
+    let n = conn.execute(&stmt, &[&&*name, &&*group_id]).await?;
+    if n != 1 { return private::err(); }
+
+    JkmxJsonResponse::Response(StatusCode::OK, BYTES_EMPTY)
 }
 
 #[derive(Deserialize)]
@@ -219,7 +294,10 @@ async fn get_group_member_list(req: JsonReqult<GetGroupMemberListRequest>) -> Jk
 
 pub fn router(_header: &'static Parts) -> Router {
     Router::new()
+        .route("/searchGroup", get(search_group))
         .route("/createGroup", post(create_group))
+        .route("/deleteGroup", post(delete_group))
+        .route("/renameGroup", post(rename_group))
         .route("/addMember", post(add_member))
         .route("/removeMember", post(remove_member))
         .route("/setGroupAdmin", post(set_group_admin))

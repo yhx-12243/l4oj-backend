@@ -64,7 +64,7 @@ struct HomepageRequest {
     locale: Option<CompactString>,
 }
 
-const ANNOUNCEMENT_IDS: [u32; 3] = [1, 2, 3];
+const ANNOUNCEMENT_IDS: [u32; 4] = [1, 2, 3, 4];
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]

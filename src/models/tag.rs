@@ -48,4 +48,37 @@ impl Tag {
         let row = db.query_one(&stmt, &[&color, unsafe { &*name }]).await?;
         row.try_get(0).map(i32::cast_unsigned)
     }
+
+    pub async fn update(id: u32, color: &str, name: &LocaleDict, db: &mut Client) -> DBResult<()> {
+        pub const SQL: &str = "update lean4oj.tags set color = $1, name = $2 where id = $3";
+
+        let stmt = db.prepare_static(SQL.into()).await?;
+        let name: *const Json<HashMap<CompactString, CompactString>> = (&raw const name.0).cast();
+        let n = db.execute(&stmt, &[&color, unsafe { &*name }, &id.cast_signed()]).await?;
+        if n == 1 {
+            Ok(())
+        } else {
+            Err(DBError::new(tokio_postgres::error::Kind::RowCount, Some("tag update error".into())))
+        }
+    }
+
+    pub async fn delete(id: u32, db: &mut Client) -> DBResult<()> {
+        pub const SQL: &str = "delete from lean4oj.tags where id = $1";
+
+        let stmt = db.prepare_static(SQL.into()).await?;
+        let n = db.execute(&stmt, &[&id.cast_signed()]).await?;
+        if n == 1 {
+            Ok(())
+        } else {
+            Err(DBError::new(tokio_postgres::error::Kind::RowCount, Some("tag delete error".into())))
+        }
+    }
+
+    pub async fn of_assoc_pid(pid: i32, db: &mut Client) -> DBResult<Vec<Self>> {
+        pub const SQL: &str = "select id, color, name from lean4oj.tags inner join lean4oj.problem_tags on id = tid where pid = $1 order by id";
+
+        let stmt = db.prepare_static(SQL.into()).await?;
+        let stream = db.query_raw(&stmt, [pid]).await?;
+        stream.and_then(|row| ready(Self::try_from(row))).try_collect().await
+    }
 }

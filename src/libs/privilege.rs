@@ -13,6 +13,7 @@ use crate::{
 
 use super::db::{DBError, DBResult};
 
+/// `Admin`, `EditHomepage`, `Judger`, `ManageContest`, `ManageDiscussion`, `ManageProblem`, `ManageUser`, `ManageUserGroup`, `TooManyOLeans`
 pub const COUNT: usize = 9;
 pub type Privileges = SmallVec<[CompactString; COUNT]>;
 

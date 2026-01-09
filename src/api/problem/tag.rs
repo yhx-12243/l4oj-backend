@@ -8,8 +8,13 @@ use serde::Deserialize;
 use crate::{
     exs,
     libs::{
-        auth::Session_, constants::BYTES_NULL, db::get_connection, privilege, request::JsonReqult,
-        response::JkmxJsonResponse, serde::WithJson,
+        auth::Session_,
+        constants::{BYTES_EMPTY, BYTES_NULL},
+        db::get_connection,
+        privilege,
+        request::JsonReqult,
+        response::JkmxJsonResponse,
+        serde::WithJson,
     },
     models::{
         localedict::{LocaleDict, LocaleDictEntryOwned},
@@ -35,7 +40,7 @@ async fn all_tags(req: JsonReqult<GetAllTagsRequest>) -> JkmxJsonResponse {
             r#"{{"id":{},"color":{},"name":{}}},"#,
             tag.id,
             WithJson(&*tag.color),
-            WithJson(tag.name.apply(locale)),
+            WithJson(tag.name.apply(locale).map_or_default(|x| &**x)),
         )?;
     }
     let mut res = res.into_bytes();
@@ -68,8 +73,9 @@ async fn create_tag(
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct UpdateTagRequest {
-    id: i32,
+    id: u32,
     localized_names: Vec<LocaleDictEntryOwned>,
     color: CompactString,
 }
@@ -82,8 +88,30 @@ async fn update_tag(
 
     let mut conn = get_connection().await?;
     exs!(user, &session, &mut conn);
+    if !privilege::check(&user.uid, "Lean4OJ.ManageProblem", &mut conn).await? { return JkmxJsonResponse::Response(StatusCode::FORBIDDEN, BYTES_NULL); }
 
-    todo!()
+    let dict = localized_names.into_iter().collect::<LocaleDict>();
+    Tag::update(id, &color, &dict, &mut conn).await?;
+    JkmxJsonResponse::Response(StatusCode::OK, BYTES_EMPTY)
+}
+
+#[derive(Deserialize)]
+struct DeleteTagRequest {
+    id: u32,
+}
+
+async fn delete_tag(
+    Session_(session): Session_,
+    req: JsonReqult<DeleteTagRequest>,
+) -> JkmxJsonResponse {
+    let Json(DeleteTagRequest { id }) = req?;
+
+    let mut conn = get_connection().await?;
+    exs!(user, &session, &mut conn);
+    if !privilege::check(&user.uid, "Lean4OJ.ManageProblem", &mut conn).await? { return JkmxJsonResponse::Response(StatusCode::FORBIDDEN, BYTES_NULL); }
+
+    Tag::delete(id, &mut conn).await?;
+    JkmxJsonResponse::Response(StatusCode::OK, BYTES_EMPTY)
 }
 
 async fn all_tags_ex() -> JkmxJsonResponse {
@@ -99,5 +127,6 @@ pub fn router() -> Router {
         .route("/getAllProblemTags", post(all_tags))
         .route("/createProblemTag", post(create_tag))
         .route("/updateProblemTag", post(update_tag))
+        .route("/deleteProblemTag", post(delete_tag))
         .route("/getAllProblemTagsOfAllLocales", post(all_tags_ex))
 }

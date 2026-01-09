@@ -82,7 +82,7 @@ fn ℊ(row: Row) -> DBResult<(Discussion, User)> {
 
 // example: {"zh_CN":"喵","en_US":"Meow","ja_JP":"にゃー"}
 fn backdoor_inner(s: &mut CompactString, locale: Option<&str>) {
-    if let Some(suffix) = s.strip_prefix("\u{ea97}")
+    if let Some(suffix) = s.strip_prefix(Discussion::MAGIC_PREFIX)
     && let Ok(dict) = serde_json::from_str::<LocaleDict>(suffix)
     && let Some(t) = dict.apply_owned(locale) {
         *s = t;
@@ -90,6 +90,8 @@ fn backdoor_inner(s: &mut CompactString, locale: Option<&str>) {
 }
 
 impl Discussion {
+    pub const MAGIC_PREFIX: &str = "\u{ea97}";
+
     pub async fn by_id_aoe(id: u32, db: &mut Client) -> DBResult<Option<(Self, User)>> {
         const SQL: &str = "select id, title, content, publish, edit, update, reply_count, publisher, uid, username, email, password, register_time, ac, nickname, bio, avatar_info from lean4oj.discussions inner join lean4oj.users on publisher = uid where id = $1";
 

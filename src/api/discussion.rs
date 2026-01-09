@@ -22,7 +22,9 @@ use crate::{
         auth::Session_,
         constants::BYTES_EMPTY,
         db::{DBError, get_connection},
-        emoji, privilege,
+        emoji,
+        lquery::𝑒𝑠𝑐𝑎𝑝𝑒,
+        privilege,
         request::{JsonReqult, RawPayload},
         response::JkmxJsonResponse,
         serde::WithJson,
@@ -221,9 +223,6 @@ impl From<(Discussion, User)> for Inner2 {
     }
 }
 
-#[inline]
-const fn 𝑛𝑒𝑒𝑑_𝑒𝑠𝑐𝑎𝑝𝑒(x: u8) -> bool { matches!(x, b'%' | b'\\' | b'_') }
-
 async fn query_discussions(req: JsonReqult<QueryDiscussionRequest>) -> JkmxJsonResponse {
     let Json(QueryDiscussionRequest { locale, keyword, publisher_id, title_only, skip_count, take_count }) = req?;
 
@@ -231,19 +230,8 @@ async fn query_discussions(req: JsonReqult<QueryDiscussionRequest>) -> JkmxJsonR
     let uid = publisher_id.as_deref().unwrap_or_default();
     let has_kw = !kw.is_empty();
     let has_uid = is_lean_id(uid);
-    let mut ekw = kw;
-    let mut buf;
-    if has_kw {
-        let c = kw.bytes().filter(|&x| 𝑛𝑒𝑒𝑑_𝑒𝑠𝑐𝑎𝑝𝑒(x)).count();
-        buf = Vec::with_capacity(kw.len() + c + 2);
-        buf.push(b'%');
-        for b in kw.bytes() {
-            if 𝑛𝑒𝑒𝑑_𝑒𝑠𝑐𝑎𝑝𝑒(b) { buf.push(b'\\'); }
-            buf.push(b);
-        }
-        buf.push(b'%');
-        ekw = unsafe { core::str::from_utf8_unchecked(&buf) };
-    }
+    let buf;
+    let ekw = if has_kw { buf = 𝑒𝑠𝑐𝑎𝑝𝑒(kw); &*buf } else { kw };
 
     let extend = |mut sql: String, mut args: SmallVec<[&'static (dyn ToSql + Sync); 8]>| -> (String, SmallVec<[&'static (dyn ToSql + Sync); 8]>) {
         let mut prefix = " where";
@@ -267,7 +255,7 @@ async fn query_discussions(req: JsonReqult<QueryDiscussionRequest>) -> JkmxJsonR
     let mut conn = get_connection().await?;
 
     if title_only == Some(true) {
-        let discussions = if kw.contains('\u{ea97}') {
+        let discussions = if kw.contains(Discussion::MAGIC_PREFIX) {
             Vec::new()
         } else {
             let mut discussions = Discussion::search(skip_count, take_count, extend, &mut conn).await?;
@@ -280,7 +268,7 @@ async fn query_discussions(req: JsonReqult<QueryDiscussionRequest>) -> JkmxJsonR
         write!(&mut res, r#","count":{count}}}"#)?;
     } else {
         let mut discussions = Vec::new();
-        if !kw.contains('\u{ea97}') {
+        if !kw.contains(Discussion::MAGIC_PREFIX) {
             discussions = Discussion::search_aoe(skip_count, take_count, extend, &mut conn).await?.into_iter().map(Into::into).collect::<Vec<Inner2>>();
             for d in &mut discussions { d.meta.backdoor(locale.as_deref()); }
         }
@@ -509,11 +497,11 @@ async fn update_discussion(
 
     let n = if privilege::check(&user.uid, "Lean4OJ.ManageDiscussion", &mut conn).await? {
         let stmt = conn.prepare_static(SQL_PRIV.into()).await?;
-        conn.execute(&stmt, &[&&*title, &&*content, &now, &discussion_id.cast_signed()]).await?
+        conn.execute(&stmt, &[&&*title, &&*content, &now, &discussion_id.cast_signed()]).await
     } else {
         let stmt = conn.prepare_static(SQL.into()).await?;
-        conn.execute(&stmt, &[&&*title, &&*content, &now, &discussion_id.cast_signed(), &&*user.uid]).await?
-    };
+        conn.execute(&stmt, &[&&*title, &&*content, &now, &discussion_id.cast_signed(), &&*user.uid]).await
+    }?;
     if n != 1 { return private::err(); }
 
     JkmxJsonResponse::Response(StatusCode::OK, BYTES_EMPTY)

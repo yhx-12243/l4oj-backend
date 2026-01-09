@@ -23,6 +23,8 @@ ALTER TABLE ONLY lean4oj.user_information DROP CONSTRAINT user_information_uid_f
 ALTER TABLE ONLY lean4oj.user_groups DROP CONSTRAINT user_groups_uid_fkey;
 ALTER TABLE ONLY lean4oj.user_groups DROP CONSTRAINT user_groups_gid_fkey;
 ALTER TABLE ONLY lean4oj.problems DROP CONSTRAINT problems_owner_fkey;
+ALTER TABLE ONLY lean4oj.problem_tags DROP CONSTRAINT problem_tags_tid_fkey;
+ALTER TABLE ONLY lean4oj.problem_tags DROP CONSTRAINT problem_tags_pid_fkey;
 ALTER TABLE ONLY lean4oj.discussions DROP CONSTRAINT discussions_publisher_fkey;
 ALTER TABLE ONLY lean4oj.discussion_replies DROP CONSTRAINT discussion_replies_publisher_fkey;
 ALTER TABLE ONLY lean4oj.discussion_replies DROP CONSTRAINT discussion_replies_did_fkey;
@@ -38,6 +40,7 @@ ALTER TABLE ONLY lean4oj.user_information DROP CONSTRAINT user_information_pkey;
 ALTER TABLE ONLY lean4oj.user_groups DROP CONSTRAINT user_groups_pkey;
 ALTER TABLE ONLY lean4oj.tags DROP CONSTRAINT tags_pkey;
 ALTER TABLE ONLY lean4oj.problems DROP CONSTRAINT problems_pkey;
+ALTER TABLE ONLY lean4oj.problem_tags DROP CONSTRAINT problem_tags_pkey;
 ALTER TABLE ONLY lean4oj.groups DROP CONSTRAINT groups_pkey;
 ALTER TABLE ONLY lean4oj.discussions DROP CONSTRAINT discussions_pkey;
 ALTER TABLE ONLY lean4oj.discussion_replies DROP CONSTRAINT discussion_replies_pkey;
@@ -54,6 +57,7 @@ DROP SEQUENCE lean4oj.tags_id_seq;
 DROP TABLE lean4oj.tags;
 DROP SEQUENCE lean4oj.problems_pid_seq;
 DROP TABLE lean4oj.problems;
+DROP TABLE lean4oj.problem_tags;
 DROP TABLE lean4oj.groups;
 DROP SEQUENCE lean4oj.discussions_id_seq;
 DROP TABLE lean4oj.discussions;
@@ -123,7 +127,7 @@ ALTER SEQUENCE lean4oj.discussion_replies_id_seq OWNED BY lean4oj.discussion_rep
 
 CREATE TABLE lean4oj.discussions (
     id integer NOT NULL,
-    title character varying(80) NOT NULL,
+    title character varying(256) NOT NULL,
     content text NOT NULL,
     publish timestamp without time zone NOT NULL,
     edit timestamp without time zone NOT NULL,
@@ -164,6 +168,16 @@ CREATE TABLE lean4oj.groups (
 
 
 --
+-- Name: problem_tags; Type: TABLE; Schema: lean4oj; Owner: -
+--
+
+CREATE TABLE lean4oj.problem_tags (
+    pid integer NOT NULL,
+    tid integer NOT NULL
+);
+
+
+--
 -- Name: problems; Type: TABLE; Schema: lean4oj; Owner: -
 --
 
@@ -175,7 +189,8 @@ CREATE TABLE lean4oj.problems (
     content jsonb NOT NULL,
     sub integer DEFAULT 0 NOT NULL,
     ac integer DEFAULT 0 NOT NULL,
-    jb jsonb NOT NULL
+    submittable boolean DEFAULT true NOT NULL,
+    jb jsonb CONSTRAINT problems_jb_not_null1 NOT NULL
 );
 
 
@@ -387,6 +402,14 @@ ALTER TABLE ONLY lean4oj.groups
 
 
 --
+-- Name: problem_tags problem_tags_pkey; Type: CONSTRAINT; Schema: lean4oj; Owner: -
+--
+
+ALTER TABLE ONLY lean4oj.problem_tags
+    ADD CONSTRAINT problem_tags_pkey PRIMARY KEY (pid, tid);
+
+
+--
 -- Name: problems problems_pkey; Type: CONSTRAINT; Schema: lean4oj; Owner: -
 --
 
@@ -503,6 +526,22 @@ ALTER TABLE ONLY lean4oj.discussions
 
 
 --
+-- Name: problem_tags problem_tags_pid_fkey; Type: FK CONSTRAINT; Schema: lean4oj; Owner: -
+--
+
+ALTER TABLE ONLY lean4oj.problem_tags
+    ADD CONSTRAINT problem_tags_pid_fkey FOREIGN KEY (pid) REFERENCES lean4oj.problems(pid) MATCH FULL ON UPDATE CASCADE ON DELETE CASCADE;
+
+
+--
+-- Name: problem_tags problem_tags_tid_fkey; Type: FK CONSTRAINT; Schema: lean4oj; Owner: -
+--
+
+ALTER TABLE ONLY lean4oj.problem_tags
+    ADD CONSTRAINT problem_tags_tid_fkey FOREIGN KEY (tid) REFERENCES lean4oj.tags(id) MATCH FULL ON DELETE CASCADE;
+
+
+--
 -- Name: problems problems_owner_fkey; Type: FK CONSTRAINT; Schema: lean4oj; Owner: -
 --
 
@@ -515,7 +554,7 @@ ALTER TABLE ONLY lean4oj.problems
 --
 
 ALTER TABLE ONLY lean4oj.user_groups
-    ADD CONSTRAINT user_groups_gid_fkey FOREIGN KEY (gid) REFERENCES lean4oj.groups(gid) MATCH FULL;
+    ADD CONSTRAINT user_groups_gid_fkey FOREIGN KEY (gid) REFERENCES lean4oj.groups(gid) MATCH FULL ON UPDATE CASCADE ON DELETE CASCADE;
 
 
 --
