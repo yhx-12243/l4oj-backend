@@ -1,10 +1,11 @@
+use std::collections::BTreeMap;
+
 use compact_str::CompactString;
-use hashbrown::HashMap;
 use serde::{Deserialize, Serialize, ser::SerializeSeq};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[repr(transparent)]
-pub struct LocaleDict<T = CompactString>(pub HashMap<CompactString, T>);
+pub struct LocaleDict<T = CompactString>(pub BTreeMap<CompactString, T>);
 
 impl<T> LocaleDict<T> {
     pub fn apply(&self, locale: Option<&str>) -> Option<&T> {

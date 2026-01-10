@@ -62,16 +62,16 @@ impl Reply {
         const SQL: &str = "(select id, content, publish, edit, did, publisher from lean4oj.discussion_replies where did = $1 order by id limit $2::integer) union (select * from lean4oj.discussion_replies where did = $1 order by id desc limit $3::integer) order by id";
 
         let stmt = db.prepare_static(SQL.into()).await?;
-        let rows = db.query_raw(&stmt, [did.cast_signed(), head as i32, tail as i32]).await?;
-        rows.and_then(|row| ready(Self::try_from(row))).try_collect().await
+        let stream = db.query_raw(&stmt, [did.cast_signed(), head as i32, tail as i32]).await?;
+        stream.and_then(|row| ready(Self::try_from(row))).try_collect().await
     }
 
     pub async fn stat_interval(did: u32, before: u32, after: u32, count: u64, db: &mut Client) -> DBResult<Vec<Self>> {
         const SQL: &str = "select id, content, publish, edit, did, publisher from lean4oj.discussion_replies where did = $1 and id > $2 and id < $3 order by id limit $4::integer";
 
         let stmt = db.prepare_static(SQL.into()).await?;
-        let rows = db.query_raw(&stmt, [did.cast_signed(), after.cast_signed(), before.cast_signed(), count as i32]).await?;
-        rows.and_then(|row| ready(Self::try_from(row))).try_collect().await
+        let stream = db.query_raw(&stmt, [did.cast_signed(), after.cast_signed(), before.cast_signed(), count as i32]).await?;
+        stream.and_then(|row| ready(Self::try_from(row))).try_collect().await
     }
 }
 

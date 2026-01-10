@@ -36,6 +36,7 @@ use crate::{
             Discussion, DiscussionReactionAOE, DiscussionReactionType, DiscussionReply,
             DiscussionReplyAOE, QueryRepliesType, REPLY_PERMISSION_DEFAULT, reaction_aoe,
         },
+        problem::Problem,
         user::{User, UserAOE},
     },
 };
@@ -71,7 +72,7 @@ mod private {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CreateDiscussionRequest {
-    problem_id: Option<u32>,
+    problem_id: Option<i32>,
     title: CompactString,
     content: CompactString,
 }
@@ -81,12 +82,12 @@ async fn create_discussion(
     Session_(session): Session_,
     req: JsonReqult<CreateDiscussionRequest>,
 ) -> JkmxJsonResponse {
-    let Json(CreateDiscussionRequest { title, content, .. }) = req?;
+    let Json(CreateDiscussionRequest { problem_id, title, content }) = req?;
 
     let mut conn = get_connection().await?;
     exs!(user, &session, &mut conn);
 
-    let id = Discussion::create(&title, &content, now, &user.uid, &mut conn).await?;
+    let id = Discussion::create(problem_id, &title, &content, now, &user.uid, &mut conn).await?;
     let res = format!(r#"{{"discussionId":{id}}}"#);
     JkmxJsonResponse::Response(StatusCode::OK, res.into())
 }
@@ -197,7 +198,7 @@ async fn reaction(
 struct QueryDiscussionRequest {
     locale: Option<CompactString>,
     keyword: Option<CompactString>,
-    // problem_id
+    problem_id: Option<i32>, // `null` for global. `0` for ALL problems.
     publisher_id: Option<CompactString>,
     title_only: Option<bool>,
     skip_count: u64,
@@ -210,21 +211,50 @@ struct Inner1 {
     meta: Discussion,
 }
 
-#[derive(Serialize)]
-struct Inner2 {
-    meta: Discussion,
-    publisher: User,
+struct Inner2<'a> {
+    problem: Problem,
+    locale: Option<&'a str>,
 }
 
-impl From<(Discussion, User)> for Inner2 {
-    #[inline(always)]
-    fn from((meta, publisher): (Discussion, User)) -> Self {
-        Self { meta, publisher }
+impl Serialize for Inner2<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer
+    {
+        let mut map = serializer.serialize_map(Some(3))?;
+        map.serialize_entry("meta", &self.problem)?;
+        if let Some((local_key, content)) = self.problem.content.apply_with_key(self.locale) {
+            map.serialize_entry("title", &*content.title)?;
+            map.serialize_entry("titleLocale", &**local_key)?;
+        } else {
+            map.serialize_entry("title", &())?;
+            map.serialize_entry("titleLocale", &())?;
+        }
+        map.end()
     }
 }
 
-async fn query_discussions(req: JsonReqult<QueryDiscussionRequest>) -> JkmxJsonResponse {
-    let Json(QueryDiscussionRequest { locale, keyword, publisher_id, title_only, skip_count, take_count }) = req?;
+#[derive(Serialize)]
+struct Inner3<'a> {
+    meta: Discussion,
+    problem: Option<Inner2<'a>>,
+    publisher: User,
+}
+
+#[allow(clippy::too_many_lines)]
+async fn query_discussions(
+    Session_(session): Session_,
+    req: JsonReqult<QueryDiscussionRequest>,
+) -> JkmxJsonResponse {
+    let Json(QueryDiscussionRequest {
+        locale,
+        keyword,
+        problem_id,
+        publisher_id,
+        title_only,
+        skip_count,
+        take_count,
+    }) = req?;
 
     let kw = keyword.as_deref().unwrap_or_default();
     let uid = publisher_id.as_deref().unwrap_or_default();
@@ -233,26 +263,51 @@ async fn query_discussions(req: JsonReqult<QueryDiscussionRequest>) -> JkmxJsonR
     let buf;
     let ekw = if has_kw { buf = 𝑒𝑠𝑐𝑎𝑝𝑒(kw); &*buf } else { kw };
 
+    let mut res = r#"{"discussions":"#.to_owned();
+    let mut conn = get_connection().await?;
+    let maybe_user = User::from_maybe_session(&session, &mut conn).await?;
+    let s_uid = maybe_user.as_ref().map(|u| &*u.uid);
+    let privi = if let Some(uid) = s_uid {
+        privilege::check(uid, "Lean4OJ.ManageProblem", &mut conn).await?
+    } else {
+        false
+    };
+
     let extend = |mut sql: String, mut args: SmallVec<[&'static (dyn ToSql + Sync); 8]>| -> (String, SmallVec<[&'static (dyn ToSql + Sync); 8]>) {
-        let mut prefix = " where";
+        match problem_id {
+            None => sql.push_str(" where pid is null"),
+            Some(0) => sql.push_str(" where pid is not null"),
+            Some(ref pid) => {
+                let _ = write!(&mut sql, " where pid = ${}", args.len() + 1);
+                args.push(
+                    unsafe { core::mem::transmute::<&i32, &'static i32>(pid) } as _
+                );
+            }
+        }
         if has_kw {
-            let _ = write!(&mut sql, " where title ilike ${}", args.len() + 1);
-            prefix = " and";
+            let _ = write!(&mut sql, " and title ilike ${}", args.len() + 1);
             args.push(
                 unsafe { core::mem::transmute::<&&str, &'static &str>(&ekw) } as _
             );
         }
         if has_uid {
-            let _ = write!(&mut sql, "{prefix} publisher = ${}", args.len() + 1);
+            let _ = write!(&mut sql, " and publisher = ${}", args.len() + 1);
             args.push(
                 unsafe { core::mem::transmute::<&&str, &'static &str>(&uid) } as _
             );
         }
+        if problem_id.is_some() && !privi {
+            if let Some(ref uid) = s_uid {
+                let _ = write!(&mut sql, " and (owner = ${} or is_public = true)", args.len() + 1);
+                args.push(
+                    unsafe { core::mem::transmute::<&&str, &'static &str>(uid) } as _
+                );
+            } else {
+                sql.push_str(" and is_public = true");
+            }
+        }
         (sql, args)
     };
-
-    let mut res = r#"{"discussions":"#.to_owned();
-    let mut conn = get_connection().await?;
 
     if title_only == Some(true) {
         let discussions = if kw.contains(Discussion::MAGIC_PREFIX) {
@@ -264,29 +319,57 @@ async fn query_discussions(req: JsonReqult<QueryDiscussionRequest>) -> JkmxJsonR
             unsafe { core::mem::transmute::<Vec<Discussion>, Vec<Inner1>>(discussions) }
         };
         serde_json::to_writer(unsafe { res.as_mut_vec() }, &discussions)?;
-        let count = Discussion::count(extend, &mut conn).await?;
+        let count = Discussion::count_aoe(extend, &mut conn).await?;
         write!(&mut res, r#","count":{count}}}"#)?;
     } else {
         let mut discussions = Vec::new();
         if !kw.contains(Discussion::MAGIC_PREFIX) {
-            discussions = Discussion::search_aoe(skip_count, take_count, extend, &mut conn).await?.into_iter().map(Into::into).collect::<Vec<Inner2>>();
+            discussions = Discussion::search_aoe(skip_count, take_count, extend, &mut conn)
+                .await?
+                .into_iter()
+                .map(|(meta, problem, publisher)| Inner3 {
+                    meta,
+                    problem: problem.map(|problem| Inner2 {
+                        problem,
+                        locale: locale.as_deref(),
+                    }),
+                    publisher,
+                })
+                .collect::<Vec<Inner3>>();
             for d in &mut discussions { d.meta.backdoor(locale.as_deref()); }
         }
         serde_json::to_writer(unsafe { res.as_mut_vec() }, &discussions)?;
-        let count = Discussion::count(extend, &mut conn).await?;
+        let count = Discussion::count_aoe(extend, &mut conn).await?;
         write!(&mut res, r#","permissions":{{"createDiscussion":true,"filterNonpublic":true}},"count":{count}"#)?;
         if has_uid {
             res.push_str(r#","filterPublisher":"#);
-            let user;
-            serde_json::to_writer(
-                unsafe { res.as_mut_vec() },
-                if let Some(Inner2 { publisher, .. }) = discussions.first() {
+            let user_slot: Option<User>;
+            let user_ref: &User =
+                if let Some(Inner3 { publisher, .. }) = discussions.first() {
                     publisher
                 } else {
-                    user = User::by_uid(uid, &mut conn).await?;
-                    if let Some(u) = user.as_ref() { u } else { return NO_SUCH_USER; }
-                }
-            )?;
+                    user_slot = User::by_uid(uid, &mut conn).await?;
+                    if let Some(u) = user_slot.as_ref() { u } else { return NO_SUCH_USER; }
+                };
+            serde_json::to_writer(unsafe { res.as_mut_vec() }, user_ref)?;
+        }
+        if let Some(pid) = problem_id && pid != 0 {
+            res.push_str(r#","filterProblem":"#);
+            let problem_slot: Option<Inner2>;
+            let problem_ref: &Option<Inner2> =
+                if let Some(Inner3 { problem, .. }) = discussions.first() {
+                    problem
+                } else {
+                    problem_slot = if privi {
+                        Problem::by_pid(pid, &mut conn).await
+                    } else {
+                        Problem::by_pid_uid(pid, s_uid.unwrap_or_default(), &mut conn).await
+                    }?.map(|problem| Inner2 {
+                        problem, locale: locale.as_deref()
+                    });
+                    &problem_slot
+                };
+            serde_json::to_writer(unsafe { res.as_mut_vec() }, problem_ref)?;
         }
         res.push('}');
     }
@@ -308,10 +391,10 @@ struct GetDiscussionRequest {
 }
 
 #[derive(Serialize)]
-struct Inner3 {
+struct Inner4<'a> {
     meta: Discussion,
     content: CompactString,
-    // problem,
+    problem: Option<Inner2<'a>>,
     publisher: UserAOE,
     reactions: DiscussionReactionAOE,
     permissions: [&'static str; 5],
@@ -319,13 +402,13 @@ struct Inner3 {
 
 const PERMISSION_DEFAULT: [&str; 5] = ["View", "Modify", "ManagePermission", "ManagePublicness", "Delete"];
 
-struct Inner4<'a> {
+struct Inner5<'a> {
     replies: &'a [DiscussionReply],
     lookup: &'a HashMap<CompactString, UserAOE>,
     lookup2: &'a HashMap<i32, DiscussionReactionAOE>,
 }
 
-impl Serialize for Inner4<'_> {
+impl Serialize for Inner5<'_> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer
@@ -343,7 +426,7 @@ impl Serialize for Inner4<'_> {
     }
 }
 
-struct Inner5 {
+struct Inner6 {
     replies: Vec<DiscussionReply>,
     lookup: HashMap<CompactString, UserAOE>,
     lookup2: HashMap<i32, DiscussionReactionAOE>,
@@ -351,26 +434,26 @@ struct Inner5 {
     split_at: usize,
 }
 
-impl Serialize for Inner5 {
+impl Serialize for Inner6 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer
     {
         let mut map = serializer.serialize_map(None)?;
         if self.split_at == usize::MAX {
-            map.serialize_entry("repliesInRange", &Inner4 {
+            map.serialize_entry("repliesInRange", &Inner5 {
                 replies: &self.replies,
                 lookup: &self.lookup,
                 lookup2: &self.lookup2,
             })?;
             map.serialize_entry("repliesCountInRange", &self.count)?;
         } else {
-            map.serialize_entry("repliesHead", &Inner4 {
+            map.serialize_entry("repliesHead", &Inner5 {
                 replies: unsafe { self.replies.get_unchecked(..self.split_at) },
                 lookup: &self.lookup,
                 lookup2: &self.lookup2,
             })?;
-            map.serialize_entry("repliesTail", &Inner4 {
+            map.serialize_entry("repliesTail", &Inner5 {
                 replies: unsafe { self.replies.get_unchecked(self.split_at..) },
                 lookup: &self.lookup,
                 lookup2: &self.lookup2,
@@ -383,10 +466,10 @@ impl Serialize for Inner5 {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct GetDiscussionResponse {
-    discussion: Option<Inner3>,
+struct GetDiscussionResponse<'a> {
+    discussion: Option<Inner4<'a>>,
     #[serde(flatten)]
-    replies: Option<Inner5>,
+    replies: Option<Inner6>,
     permission_create_new_discussion: bool,
 }
 
@@ -419,7 +502,7 @@ async fn get_discussion(
             let replies = DiscussionReply::stat_head_tail(discussion_id, head, tail, &mut conn).await?;
             let lookup = privilege::get_area_of_effect(replies.iter().map(|r| &*r.publisher), &mut conn).await?;
             let lookup2 = reaction_aoe(replies.iter().map(|r| (!r.id).cast_signed()).chain(𝑘), uid, &mut conn).await?;
-            res.replies = Some(Inner5 {
+            res.replies = Some(Inner6 {
                 lookup,
                 lookup2,
                 count: replies.len() as u64,
@@ -432,7 +515,7 @@ async fn get_discussion(
             let replies = DiscussionReply::stat_interval(discussion_id, before_id, after_id, count, &mut conn).await?;
             let lookup = privilege::get_area_of_effect(replies.iter().map(|r| &*r.publisher), &mut conn).await?;
             let lookup2 = reaction_aoe(replies.iter().map(|r| (!r.id).cast_signed()).chain(𝑘), uid, &mut conn).await?;
-            res.replies = Some(Inner5 {
+            res.replies = Some(Inner6 {
                 lookup,
                 lookup2,
                 count: replies.len() as u64,
@@ -448,17 +531,35 @@ async fn get_discussion(
         discussion.backdoor(locale.as_deref());
         let content = mem::take(&mut discussion.content);
         let privi = privilege::all(&publisher.uid, &mut conn).await?;
-        if let Some(Inner5 { split_at: 0..usize::MAX, ref mut count, .. }) = res.replies {
+
+        // count
+        if let Some(Inner6 { split_at: 0..usize::MAX, ref mut count, .. }) = res.replies {
             *count = discussion.reply_count.into();
         }
-        let reactions = if let Some(Inner5 { ref mut lookup2, .. }) = res.replies {
+
+        // reaction
+        let reactions = if let Some(Inner6 { ref mut lookup2, .. }) = res.replies {
             lookup2.remove(&did)
         } else {
             reaction_aoe(𝑘.into_iter(), uid, &mut conn).await?.remove(&did)
         }.unwrap_or_default();
-        res.discussion = Some(Inner3 {
+
+        let problem = if let Some(pid) = discussion.problem_id {
+            if let Some(uid) = uid && privilege::check(uid, "Lean4OJ.ManageProblem", &mut conn).await? {
+                Problem::by_pid(pid.get(), &mut conn).await
+            } else {
+                Problem::by_pid_uid(pid.get(), uid.unwrap_or_default(), &mut conn).await
+            }?
+        } else {
+            None
+        };
+        res.discussion = Some(Inner4 {
             meta: discussion,
             content,
+            problem: problem.map(|problem| Inner2 {
+                problem,
+                locale: locale.as_deref(),
+            }),
             publisher: UserAOE {
                 user: publisher,
                 is_admin: privilege::is_admin(&privi),

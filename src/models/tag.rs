@@ -1,8 +1,8 @@
 use core::future::ready;
+use std::collections::BTreeMap;
 
 use compact_str::CompactString;
 use futures_util::TryStreamExt;
-use hashbrown::HashMap;
 use serde::Serialize;
 use tokio_postgres::{
     Client, Row,
@@ -44,7 +44,7 @@ impl Tag {
         pub const SQL: &str = "insert into lean4oj.tags (color, name) values ($1, $2) returning id";
 
         let stmt = db.prepare_static(SQL.into()).await?;
-        let name: *const Json<HashMap<CompactString, CompactString>> = (&raw const name.0).cast();
+        let name: *const Json<BTreeMap<CompactString, CompactString>> = (&raw const name.0).cast();
         let row = db.query_one(&stmt, &[&color, unsafe { &*name }]).await?;
         row.try_get(0).map(i32::cast_unsigned)
     }
@@ -53,7 +53,7 @@ impl Tag {
         pub const SQL: &str = "update lean4oj.tags set color = $1, name = $2 where id = $3";
 
         let stmt = db.prepare_static(SQL.into()).await?;
-        let name: *const Json<HashMap<CompactString, CompactString>> = (&raw const name.0).cast();
+        let name: *const Json<BTreeMap<CompactString, CompactString>> = (&raw const name.0).cast();
         let n = db.execute(&stmt, &[&color, unsafe { &*name }, &id.cast_signed()]).await?;
         if n == 1 {
             Ok(())

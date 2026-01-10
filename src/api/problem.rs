@@ -1,10 +1,9 @@
 use core::{fmt::Write, index::Last, str};
-use std::time::SystemTime;
+use std::{collections::BTreeMap, time::SystemTime};
 
 use axum::{Extension, Json, Router, routing::post};
 use bytes::Bytes;
 use compact_str::CompactString;
-use hashbrown::HashMap;
 use http::{StatusCode, response::Parts};
 use serde::Deserialize;
 
@@ -20,6 +19,7 @@ use crate::{
         serde::WithJson,
     },
     models::{
+        discussion::Discussion,
         localedict::{LocaleDict, LocaleDictEntryFlatten, LocaleDictEntryOwnedFlatten},
         problem::{Problem, ProblemInner},
         tag::Tag,
@@ -86,8 +86,8 @@ async fn update_problem(
     Session_(session): Session_,
     req: JsonReqult<UpdateProblemRequest>,
 ) -> JkmxJsonResponse {
-    const SQL_PRIV: &str = "update lean4oj.problems set content = $1 where pid = $2";
-    const SQL: &str = "update lean4oj.problems set content = $1 where pid = $2 and owner = $3";
+    const SQL_PRIV: &str = "update lean4oj.problems set pcontent = $1 where pid = $2";
+    const SQL: &str = "update lean4oj.problems set pcontent = $1 where pid = $2 and owner = $3";
 
     let Json(UpdateProblemRequest { problem_id, localized_contents, problem_tag_ids }) = req?;
 
@@ -95,7 +95,7 @@ async fn update_problem(
     exs!(user, &session, &mut conn);
 
     let content = localized_contents.into_iter().collect::<LocaleDict<_>>();
-    let content: &tokio_postgres::types::Json<HashMap<CompactString, ProblemInner>> = unsafe { &*(&raw const content.0).cast() };
+    let content: &tokio_postgres::types::Json<BTreeMap<CompactString, ProblemInner>> = unsafe { &*(&raw const content.0).cast() };
 
     let n = if privilege::check(&user.uid, "Lean4OJ.ManageProblem", &mut conn).await? {
         let stmt = conn.prepare_static(SQL_PRIV.into()).await?;
@@ -120,6 +120,7 @@ struct GetProblemRequest {
     localized_contents_of_all_locales: Option<bool>,
     tags_of_locale: Option<CompactString>,
     tags_of_all_locales: Option<bool>,
+    discussion_count: Option<bool>,
     permission_of_current_user: Option<bool>,
     permissions: Option<bool>,
     last_submission_and_last_accepted_submission: Option<bool>,
@@ -137,6 +138,7 @@ async fn get_problem(
         localized_contents_of_all_locales,
         tags_of_locale,
         tags_of_all_locales,
+        discussion_count,
         permission_of_current_user,
         permissions,
         last_submission_and_last_accepted_submission,
@@ -144,8 +146,20 @@ async fn get_problem(
     let Some(id) = id.or(display_id) else { bad!(BYTES_NULL) };
 
     let mut conn = get_connection().await?;
-    let Some(problem) = Problem::by_pid(id, &mut conn).await? else { return NO_SUCH_PROBLEM };
-    // let maybe_user = User::from_maybe_session(&session, &mut conn).await?;
+    let maybe_user = User::from_maybe_session(&session, &mut conn).await?;
+    let uid = maybe_user.as_ref().map(|u| &*u.uid);
+    let privi = if let Some(uid) = uid {
+        privilege::check(uid, "Lean4OJ.ManageProblem", &mut conn).await?
+    } else {
+        false
+    };
+    let Some(problem) = (
+        if privi {
+            Problem::by_pid(id, &mut conn).await
+        } else {
+            Problem::by_pid_uid(id, uid.unwrap_or_default(), &mut conn).await
+        }
+    )? else { return NO_SUCH_PROBLEM };
 
     let mut res = format!(r#"{{"meta":{}"#, WithJson(&problem));
     if owner == Some(true) {
@@ -191,6 +205,11 @@ async fn get_problem(
         unsafe { str::from_utf8_unchecked(&problem.jb) },
         problem.submittable,
     )?;
+
+    if discussion_count == Some(true) {
+        let n = Discussion::count_pid(id, &mut conn).await?;
+        write!(&mut res, r#","discussionCount":{n}"#)?;
+    }
 
     if permission_of_current_user == Some(true) {
         res.push_str(r#","permissionOfCurrentUser":["View","Modify","ManagePermission","ManagePublicness","Delete"]"#);
@@ -276,6 +295,36 @@ async fn set_problem_publicness(
     JkmxJsonResponse::Response(StatusCode::OK, BYTES_EMPTY)
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeleteProblemRequest {
+    problem_id: i32,
+}
+
+async fn delete_problem(
+    Session_(session): Session_,
+    req: JsonReqult<DeleteProblemRequest>,
+) -> JkmxJsonResponse {
+    const SQL_PRIV: &str = "delete from lean4oj.problems where pid = $1";
+    const SQL: &str = "delete from lean4oj.problems where pid = $1 and owner = $2";
+
+    let Json(DeleteProblemRequest { problem_id }) = req?;
+
+    let mut conn = get_connection().await?;
+    exs!(user, &session, &mut conn);
+
+    let n = if privilege::check(&user.uid, "Lean4OJ.ManageProblem", &mut conn).await? {
+        let stmt = conn.prepare_static(SQL_PRIV.into()).await?;
+        conn.execute(&stmt, &[&problem_id]).await
+    } else {
+        let stmt = conn.prepare_static(SQL.into()).await?;
+        conn.execute(&stmt, &[&problem_id, &&*user.uid]).await
+    }?;
+    if n != 1 { return private::err(); }
+
+    JkmxJsonResponse::Response(StatusCode::OK, BYTES_EMPTY)
+}
+
 pub fn router(_header: &'static Parts) -> Router {
     Router::new()
         .route("/queryProblemSet", post(query_problem_set))
@@ -284,5 +333,6 @@ pub fn router(_header: &'static Parts) -> Router {
         .route("/getProblem", post(get_problem))
         .route("/setProblemDisplayId", post(set_problem_id))
         .route("/setProblemPublic", post(set_problem_publicness))
+        .route("/deleteProblem", post(delete_problem))
         .merge(tag::router())
 }

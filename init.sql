@@ -26,6 +26,7 @@ ALTER TABLE ONLY lean4oj.problems DROP CONSTRAINT problems_owner_fkey;
 ALTER TABLE ONLY lean4oj.problem_tags DROP CONSTRAINT problem_tags_tid_fkey;
 ALTER TABLE ONLY lean4oj.problem_tags DROP CONSTRAINT problem_tags_pid_fkey;
 ALTER TABLE ONLY lean4oj.discussions DROP CONSTRAINT discussions_publisher_fkey;
+ALTER TABLE ONLY lean4oj.discussions DROP CONSTRAINT discussions_pid_fkey;
 ALTER TABLE ONLY lean4oj.discussion_replies DROP CONSTRAINT discussion_replies_publisher_fkey;
 ALTER TABLE ONLY lean4oj.discussion_replies DROP CONSTRAINT discussion_replies_did_fkey;
 ALTER TABLE ONLY lean4oj.discussion_reactions DROP CONSTRAINT discussion_reactions_uid_fkey;
@@ -133,7 +134,8 @@ CREATE TABLE lean4oj.discussions (
     edit timestamp without time zone NOT NULL,
     update timestamp without time zone CONSTRAINT discussions_reply_latest_not_null NOT NULL,
     reply_count integer DEFAULT 0 CONSTRAINT discussions_reply_count1_not_null NOT NULL,
-    publisher character varying(24) CONSTRAINT discussions_publisher1_not_null NOT NULL COLLATE public.case_insensitive
+    publisher character varying(24) CONSTRAINT discussions_publisher1_not_null NOT NULL COLLATE public.case_insensitive,
+    pid integer
 );
 
 
@@ -186,11 +188,11 @@ CREATE TABLE lean4oj.problems (
     is_public boolean DEFAULT false NOT NULL,
     public_at timestamp without time zone DEFAULT '1970-01-01 00:00:00'::timestamp without time zone NOT NULL,
     owner character varying(24) NOT NULL COLLATE public.case_insensitive,
-    content jsonb NOT NULL,
+    pcontent jsonb NOT NULL,
     sub integer DEFAULT 0 NOT NULL,
     ac integer DEFAULT 0 NOT NULL,
     submittable boolean DEFAULT true NOT NULL,
-    jb jsonb CONSTRAINT problems_jb_not_null1 NOT NULL
+    jb jsonb NOT NULL
 );
 
 
@@ -515,6 +517,14 @@ ALTER TABLE ONLY lean4oj.discussion_replies
 
 ALTER TABLE ONLY lean4oj.discussion_replies
     ADD CONSTRAINT discussion_replies_publisher_fkey FOREIGN KEY (publisher) REFERENCES lean4oj.users(uid) MATCH FULL;
+
+
+--
+-- Name: discussions discussions_pid_fkey; Type: FK CONSTRAINT; Schema: lean4oj; Owner: -
+--
+
+ALTER TABLE ONLY lean4oj.discussions
+    ADD CONSTRAINT discussions_pid_fkey FOREIGN KEY (pid) REFERENCES lean4oj.problems(pid) MATCH FULL ON UPDATE CASCADE;
 
 
 --

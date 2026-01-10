@@ -1,9 +1,11 @@
 use core::fmt;
-use std::time::SystemTime;
+use std::{
+    collections::btree_map::{BTreeMap, Keys},
+    time::SystemTime,
+};
 
 use bytes::Bytes;
 use compact_str::CompactString;
-use hashbrown::hash_map::{HashMap, Keys};
 use serde::{
     Deserialize, Serialize,
     ser::{SerializeMap, SerializeSeq},
@@ -39,7 +41,7 @@ impl Serialize for ProblemContentSection {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProblemInner {
     pub title: CompactString,
@@ -101,7 +103,7 @@ impl TryFrom<Row> for Problem {
         let is_public = row.try_get("is_public")?;
         let public_at = row.try_get("public_at")?;
         let owner = row.try_get::<_, &str>("owner")?.into();
-        let Json(content) = row.try_get("content")?;
+        let Json(content) = row.try_get("pcontent")?;
         let sub = row.try_get::<_, i32>("sub")?.cast_unsigned();
         let ac = row.try_get::<_, i32>("ac")?.cast_unsigned();
         let submittable = row.try_get("submittable")?;
@@ -115,7 +117,7 @@ impl TryFrom<Row> for Problem {
 
 impl Problem {
     pub async fn by_pid(pid: i32, db: &mut Client) -> DBResult<Option<Self>> {
-        const SQL: &str = "select pid, is_public, public_at, owner, content, sub, ac, submittable, jb from lean4oj.problems where pid = $1";
+        const SQL: &str = "select pid, is_public, public_at, owner, pcontent, sub, ac, submittable, jb from lean4oj.problems where pid = $1";
 
         let stmt = db.prepare_static(SQL.into()).await?;
         let result = match db.query_opt(&stmt, &[&pid]).await? {
@@ -125,11 +127,22 @@ impl Problem {
         Ok(result)
     }
 
-    pub async fn create(owner: &str, content: &LocaleDict<ProblemInner>, db: &mut Client) -> DBResult<i32> {
-        const SQL: &str = "insert into lean4oj.problems (owner, content, jb) values ($1, $2, '{}') returning pid";
+    pub async fn by_pid_uid(pid: i32, uid: &str, db: &mut Client) -> DBResult<Option<Self>> {
+        const SQL: &str = "select pid, is_public, public_at, owner, pcontent, sub, ac, submittable, jb from lean4oj.problems where pid = $1 and (owner = $2 or is_public = true)";
 
         let stmt = db.prepare_static(SQL.into()).await?;
-        let content: *const Json<HashMap<CompactString, ProblemInner>> = (&raw const content.0).cast();
+        let result = match db.query_opt(&stmt, &[&pid, &uid]).await? {
+            Some(row) => Some(row.try_into()?),
+            None => None,
+        };
+        Ok(result)
+    }
+
+    pub async fn create(owner: &str, content: &LocaleDict<ProblemInner>, db: &mut Client) -> DBResult<i32> {
+        const SQL: &str = "insert into lean4oj.problems (owner, pcontent, jb) values ($1, $2, '{}') returning pid";
+
+        let stmt = db.prepare_static(SQL.into()).await?;
+        let content: *const Json<BTreeMap<CompactString, ProblemInner>> = (&raw const content.0).cast();
         let row = db.query_one(&stmt, &[&owner, unsafe { &*content }]).await?;
         row.try_get(0)
     }

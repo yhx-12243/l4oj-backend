@@ -35,7 +35,7 @@ impl const Default for Security {
 #[serde(rename_all = "camelCase")]
 pub struct Pagination {
     pub homepage_user_list: u32,
-    homepage_problem_list: u32,
+    pub homepage_problem_list: u32,
     problem_set: u32,
     search_problems_preview: u32,
     submissions: u32,
