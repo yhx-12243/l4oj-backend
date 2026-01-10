@@ -101,5 +101,5 @@ macro_rules! exs {
                 $crate::libs::constants::BYTES_NULL,
             );
         };
-    }
+    };
 }

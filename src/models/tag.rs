@@ -3,14 +3,18 @@ use std::collections::BTreeMap;
 
 use compact_str::CompactString;
 use futures_util::TryStreamExt;
-use serde::Serialize;
+use hashbrown::HashMap;
+use serde::{
+    Serialize,
+    ser::{SerializeMap, SerializeSeq},
+};
 use tokio_postgres::{
     Client, Row,
     types::{Json, ToSql},
 };
 
 use super::localedict::LocaleDict;
-use crate::libs::db::{DBError, DBResult};
+use crate::libs::db::{DBError, DBResult, ToSqlIter};
 
 #[derive(Serialize)]
 pub struct Tag {
@@ -80,5 +84,55 @@ impl Tag {
         let stmt = db.prepare_static(SQL.into()).await?;
         let stream = db.query_raw(&stmt, [pid]).await?;
         stream.and_then(|row| ready(Self::try_from(row))).try_collect().await
+    }
+
+    pub async fn get_area_of_effect(out: &mut HashMap<u32, Option<Self>>, db: &mut Client) -> DBResult<()> {
+        const SQL: &str = "select id, color, name from lean4oj.tags where id = any($1)";
+
+        let stmt = db.prepare_static(SQL.into()).await?;
+        let stream = db.query_raw(&stmt, [ToSqlIter(out.keys().map(|&x| x.cast_signed()))]).await?;
+        stream.try_for_each(|row| ready(try {
+            let tag = Self::try_from(row)?;
+            if let Some(slot) = out.get_mut(&tag.id) { *slot = Some(tag); }
+        })).await
+    }
+}
+
+pub struct LTag<'a, 'b> {
+    pub tag: &'a Tag,
+    pub locale: Option<&'b str>,
+}
+
+impl Serialize for LTag<'_, '_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut map = serializer.serialize_map(Some(3))?;
+        map.serialize_entry("id", &self.tag.id)?;
+        map.serialize_entry("color", &self.tag.color)?;
+        map.serialize_entry("name", &self.tag.name.apply(self.locale).map_or_default(|x| &**x))?;
+        map.end()
+    }
+}
+
+pub struct LTags<'a, I> {
+    pub tags: I,
+    pub locale: Option<&'a str>,
+}
+
+impl<'a, I> Serialize for LTags<'_, I>
+where
+    I: Iterator<Item = &'a Tag> + Clone,
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer
+    {
+        let mut seq = serializer.serialize_seq(None)?;
+        for tag in self.tags.clone() {
+            seq.serialize_element(&LTag { tag, locale: self.locale })?;
+        }
+        seq.end()
     }
 }

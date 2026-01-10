@@ -369,6 +369,7 @@ docs		docs		1970-01-01 00:00:00	0
 references		references		1970-01-01 00:00:00	0			
 Lean4OJ		Lean4OJ		1970-01-01 00:00:00	0			
 build		build		1970-01-01 00:00:00	0			
+submissions		submissions		1970-01-01 00:00:00	0			
 \.
 
 --

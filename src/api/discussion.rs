@@ -159,8 +159,8 @@ async fn reaction(
     Session_(session): Session_,
     req: JsonReqult<ReactionRequest>,
 ) -> JkmxJsonResponse {
-    const SQL_EXIST_D: &str = "select 1 from lean4oj.discussions where id = $1";
-    const SQL_EXIST_R: &str = "select 1 from lean4oj.discussion_replies where id = $1";
+    const SQL_EXIST_D: &str = "select from lean4oj.discussions where id = $1";
+    const SQL_EXIST_R: &str = "select from lean4oj.discussion_replies where id = $1";
     const SQL_REACT_ADD: &str = "insert into lean4oj.discussion_reactions (eid, uid, emoji) values ($1, $2, $3)";
     const SQL_REACT_DEL: &str = "delete from lean4oj.discussion_reactions where eid = $1 and uid = $2 and emoji = $3";
 
@@ -263,7 +263,6 @@ async fn query_discussions(
     let buf;
     let ekw = if has_kw { buf = 𝑒𝑠𝑐𝑎𝑝𝑒(kw); &*buf } else { kw };
 
-    let mut res = r#"{"discussions":"#.to_owned();
     let mut conn = get_connection().await?;
     let maybe_user = User::from_maybe_session(&session, &mut conn).await?;
     let s_uid = maybe_user.as_ref().map(|u| &*u.uid);
@@ -309,22 +308,24 @@ async fn query_discussions(
         (sql, args)
     };
 
+    let skip = skip_count.min(i64::MAX.cast_unsigned()).cast_signed();
+    let take = take_count.min(100).cast_signed();
+
+    let mut res = r#"{"discussions":"#.to_owned();
     if title_only == Some(true) {
         let discussions = if kw.contains(Discussion::MAGIC_PREFIX) {
             Vec::new()
         } else {
-            let mut discussions = Discussion::search(skip_count, take_count, extend, &mut conn).await?;
+            let mut discussions = Discussion::search(skip, take, extend, &mut conn).await?;
             for d in &mut discussions { d.backdoor(locale.as_deref()); }
             #[allow(clippy::transmute_undefined_repr)]
             unsafe { core::mem::transmute::<Vec<Discussion>, Vec<Inner1>>(discussions) }
         };
         serde_json::to_writer(unsafe { res.as_mut_vec() }, &discussions)?;
-        let count = Discussion::count_aoe(extend, &mut conn).await?;
-        write!(&mut res, r#","count":{count}}}"#)?;
     } else {
         let mut discussions = Vec::new();
         if !kw.contains(Discussion::MAGIC_PREFIX) {
-            discussions = Discussion::search_aoe(skip_count, take_count, extend, &mut conn)
+            discussions = Discussion::search_aoe(skip, take, extend, &mut conn)
                 .await?
                 .into_iter()
                 .map(|(meta, problem, publisher)| Inner3 {
@@ -371,8 +372,8 @@ async fn query_discussions(
                 };
             serde_json::to_writer(unsafe { res.as_mut_vec() }, problem_ref)?;
         }
-        res.push('}');
     }
+    res.push('}');
     JkmxJsonResponse::Response(StatusCode::OK, res.into())
 }
 
@@ -631,11 +632,11 @@ async fn update_reply(
 
     let row = if privilege::check(&user.uid, "Lean4OJ.ManageDiscussion", &mut conn).await? {
         let stmt = conn.prepare_static(SQL_PRIV.into()).await?;
-        conn.query_one(&stmt, &[&&*content, &now, &discussion_reply_id.cast_signed()]).await?
+        conn.query_one(&stmt, &[&&*content, &now, &discussion_reply_id.cast_signed()]).await
     } else {
         let stmt = conn.prepare_static(SQL.into()).await?;
-        conn.query_one(&stmt, &[&&*content, &now, &discussion_reply_id.cast_signed(), &&*user.uid]).await?
-    };
+        conn.query_one(&stmt, &[&&*content, &now, &discussion_reply_id.cast_signed(), &&*user.uid]).await
+    }?;
     let did = row.try_get::<_, i32>(0)?;
     let stmt = conn.prepare_static(SQL_UPDATE_PARENT.into()).await?;
     let n = conn.execute(&stmt, &[&now, &did]).await?;
@@ -665,11 +666,11 @@ async fn delete_discussion(
 
     let n = if privilege::check(&user.uid, "Lean4OJ.ManageDiscussion", &mut conn).await? {
         let stmt = conn.prepare_static(SQL_PRIV.into()).await?;
-        conn.execute(&stmt, &[&discussion_id.cast_signed()]).await?
+        conn.execute(&stmt, &[&discussion_id.cast_signed()]).await
     } else {
         let stmt = conn.prepare_static(SQL.into()).await?;
-        conn.execute(&stmt, &[&discussion_id.cast_signed(), &&*user.uid]).await?
-    };
+        conn.execute(&stmt, &[&discussion_id.cast_signed(), &&*user.uid]).await
+    }?;
     if n != 1 { return private::err(); }
 
     JkmxJsonResponse::Response(StatusCode::OK, BYTES_EMPTY)
@@ -699,12 +700,12 @@ async fn delete_reply(
     let row = if privilege::check(&user.uid, "Lean4OJ.ManageDiscussion", &mut conn).await? {
         let stmt = conn.prepare_static(SQL_PRIV.into()).await?;
         txn = conn.transaction().await?;
-        txn.query_one(&stmt, &[&discussion_reply_id.cast_signed()]).await?
+        txn.query_one(&stmt, &[&discussion_reply_id.cast_signed()]).await
     } else {
         let stmt = conn.prepare_static(SQL.into()).await?;
         txn = conn.transaction().await?;
-        txn.query_one(&stmt, &[&discussion_reply_id.cast_signed(), &&*user.uid]).await?
-    };
+        txn.query_one(&stmt, &[&discussion_reply_id.cast_signed(), &&*user.uid]).await
+    }?;
     let did = row.try_get::<_, i32>(0)?;
     let n = txn.execute(&stmt_p, &[&did]).await?;
     if n != 1 { return private::err(); }

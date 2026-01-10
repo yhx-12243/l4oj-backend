@@ -132,12 +132,10 @@ impl Discussion {
         row.try_get(0).map(i32::cast_unsigned)
     }
 
-    pub async fn search<'a, F>(skip: u64, take: u64, extend: F, db: &mut Client) -> DBResult<Vec<Self>>
+    pub async fn search<'a, F>(skip: i64, take: i64, extend: F, db: &mut Client) -> DBResult<Vec<Self>>
     where
         F: FnOnce(String, SmallVec<[&'a (dyn ToSql + Sync); 8]>) -> (String, SmallVec<[&'a (dyn ToSql + Sync); 8]>),
     {
-        let skip = skip.min(i64::MAX.cast_unsigned()).cast_signed();
-        let take = take.min(100).cast_signed();
         let mut sql = "select id, title, content, publish, edit, update, reply_count, publisher, pid from lean4oj.discussions natural left join lean4oj.problems".to_owned();
         let mut args: SmallVec<[&(dyn ToSql + Sync); 8]> = smallvec![
             unsafe { core::mem::transmute::<&i64, &'a i64>(&skip) } as _,
@@ -151,14 +149,12 @@ impl Discussion {
         stream.and_then(|row| ready(row.try_into())).try_collect().await
     }
 
-    pub async fn search_aoe<'a, F>(skip: u64, take: u64, extend: F, db: &mut Client) -> DBResult<
+    pub async fn search_aoe<'a, F>(skip: i64, take: i64, extend: F, db: &mut Client) -> DBResult<
         Vec<(Self, Option<Problem>, User)>
     >
     where
         F: FnOnce(String, SmallVec<[&'a (dyn ToSql + Sync); 8]>) -> (String, SmallVec<[&'a (dyn ToSql + Sync); 8]>),
     {
-        let skip = skip.min(i64::MAX.cast_unsigned()).cast_signed();
-        let take = take.min(100).cast_signed();
         let mut sql = "select id, title, content, publish, edit, update, reply_count, publisher, pid, uid, username, email, password, register_time, ac, nickname, bio, avatar_info, is_public, public_at, owner, pcontent, sub, ac, submittable, jb from lean4oj.discussions inner join lean4oj.users on publisher = uid natural left join lean4oj.problems".to_owned();
         let mut args: SmallVec<[&(dyn ToSql + Sync); 8]> = smallvec![
             unsafe { core::mem::transmute::<&i64, &'a i64>(&skip) } as _,
@@ -166,7 +162,6 @@ impl Discussion {
         ];
         (sql, args) = extend(sql, args);
         sql.push_str(" order by update desc offset $1 limit $2");
-        dbg!(&sql);
 
         let stmt = db.prepare_static(sql.into()).await?;
         let stream = db.query_raw(&stmt, args).await?;

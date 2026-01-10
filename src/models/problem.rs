@@ -1,4 +1,8 @@
-use core::fmt;
+use core::{
+    fmt::{self, Write},
+    future::ready,
+    mem,
+};
 use std::{
     collections::btree_map::{BTreeMap, Keys},
     time::SystemTime,
@@ -6,11 +10,16 @@ use std::{
 
 use bytes::Bytes;
 use compact_str::CompactString;
+use futures_util::TryStreamExt;
 use serde::{
     Deserialize, Serialize,
     ser::{SerializeMap, SerializeSeq},
 };
-use tokio_postgres::{Client, Row, types::Json};
+use smallvec::{SmallVec, smallvec};
+use tokio_postgres::{
+    Client, Row,
+    types::{Json, ToSql},
+};
 
 use crate::{
     libs::{
@@ -115,6 +124,14 @@ impl TryFrom<Row> for Problem {
     }
 }
 
+#[inline]
+fn 𝒯(row: Row) -> DBResult<(Problem, Vec<u32>)> {
+    let problem = row.clone().try_into()?;
+    let tag_ids = row.try_get::<_, Vec<i32>>("tags")?;
+    #[allow(clippy::transmute_undefined_repr)]
+    Ok((problem, unsafe { mem::transmute::<Vec<i32>, Vec<u32>>(tag_ids) }))
+}
+
 impl Problem {
     pub async fn by_pid(pid: i32, db: &mut Client) -> DBResult<Option<Self>> {
         const SQL: &str = "select pid, is_public, public_at, owner, pcontent, sub, ac, submittable, jb from lean4oj.problems where pid = $1";
@@ -160,5 +177,58 @@ impl Problem {
         txn.execute(&stmt_insert, &[&pid, &ToSqlIter(tags.clone().map(u32::cast_signed))]).await?;
         txn.execute(&stmt_delete, &[&pid, &ToSqlIter(tags.map(u32::cast_signed))]).await?;
         txn.commit().await
+    }
+
+    pub async fn search_aoe<'a, F>(skip: i64, take: i64, tag_ids: Option<&'a [i32]>, extend: F, db: &mut Client) -> DBResult<Vec<(Self, Vec<u32>)>>
+    where
+        F: FnOnce(String, SmallVec<[&'a (dyn ToSql + Sync); 8]>) -> (String, SmallVec<[&'a (dyn ToSql + Sync); 8]>),
+    {
+        let mut sql = "(select pid, is_public, public_at, owner, pcontent, sub, ac, submittable, jb, array_agg(tid) as tags from lean4oj.problems natural join lean4oj.problem_tags where pid >= 0".to_owned();
+        let pos1 = sql.len();
+        let mut args: SmallVec<[&(dyn ToSql + Sync); 8]> = smallvec![
+            unsafe { core::mem::transmute::<&i64, &'a i64>(&skip) } as _,
+            unsafe { core::mem::transmute::<&i64, &'a i64>(&take) } as _,
+        ];
+        (sql, args) = extend(sql, args);
+        let pos2 = sql.len();
+        sql.push_str(" group by pid");
+        if let Some(ref tag_ids) = tag_ids {
+            let _ = write!(&mut sql, " having ${} <@ array_agg(tid)", args.len() + 1);
+            args.push(unsafe { core::mem::transmute::<&&'a [i32], &'a &'a [i32]>(tag_ids) });
+        }
+        sql.push_str(" order by pid) union all (select pid, is_public, public_at, owner, pcontent, sub, ac, submittable, jb, array_agg(tid) as tags from lean4oj.problems natural join lean4oj.problem_tags where pid < 0");
+        sql.extend_from_within(pos1..pos2);
+        sql.push_str(" group by pid");
+        if tag_ids.is_some() {
+            let _ = write!(&mut sql, " having ${} <@ array_agg(tid)", args.len());
+        }
+        sql.push_str(" order by pid desc) offset $1 limit $2");
+
+        println!("🌰 {sql}");
+
+        let stmt = db.prepare_static(sql.into()).await?;
+        let stream = db.query_raw(&stmt, args).await?;
+        stream.and_then(|row| ready(𝒯(row))).try_collect().await
+    }
+
+    pub async fn count_aoe<'a, F>(tag_ids: Option<&'a [i32]>, extend: F, db: &mut Client) -> DBResult<u64>
+    where
+        F: FnOnce(String, SmallVec<[&'a (dyn ToSql + Sync); 8]>) -> (String, SmallVec<[&'a (dyn ToSql + Sync); 8]>),
+    {
+        let mut sql = "select count(*) from (select from lean4oj.problems natural join lean4oj.problem_tags where true".to_owned();
+        let mut args: SmallVec<[&(dyn ToSql + Sync); 8]> = smallvec![];
+        (sql, args) = extend(sql, args);
+        sql.push_str(" group by pid");
+        if let Some(ref tag_ids) = tag_ids {
+            let _ = write!(&mut sql, " having ${} <@ array_agg(tid)", args.len() + 1);
+            args.push(unsafe { core::mem::transmute::<&&'a [i32], &'a &'a [i32]>(tag_ids) });
+        }
+        sql.push(')');
+
+        println!("🦝 {sql}");
+
+        let stmt = db.prepare_static(sql.into()).await?;
+        let row = db.query_one(&stmt, &args).await?;
+        row.try_get::<_, i64>(0).map(i64::cast_unsigned)
     }
 }

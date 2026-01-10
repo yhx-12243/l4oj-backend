@@ -1,6 +1,7 @@
 use std::sync::OnceLock;
 
 use bb8_postgres::{PostgresConnectionManager, bb8};
+use bytes::{BufMut, BytesMut};
 use tokio_postgres::{
     NoTls, Row,
     types::{FromSql, IsNull, Kind, ToSql, Type, to_sql_checked},
@@ -74,6 +75,7 @@ where
         .map_err(|e| DBError::new(tokio_postgres::error::Kind::FromSql(idx), Some(Box::new(e))))
 }
 
+#[derive(Debug)]
 #[repr(transparent)]
 pub struct JsonChecked<'a>(pub &'a [u8]);
 
@@ -91,6 +93,22 @@ impl<'a> FromSql<'a> for JsonChecked<'a> {
     fn accepts(_: &Type) -> bool {
         true
     }
+}
+
+impl ToSql for JsonChecked<'_> {
+    #[inline]
+    fn to_sql(&self, _: &Type, out: &mut BytesMut) -> Result<IsNull, BoxedStdError> {
+        out.put_u8(1);
+        out.extend_from_slice(self.0);
+        Ok(IsNull::No)
+    }
+
+    #[inline]
+    fn accepts(_: &Type) -> bool {
+        true
+    }
+
+    to_sql_checked!();
 }
 
 #[derive(Debug)]

@@ -84,7 +84,7 @@ pub fn normalize(raw: &str) -> Option<(bool, CompactString)> {
 }
 
 #[inline]
-pub const fn 𝑛𝑒𝑒𝑑_𝑒𝑠𝑐𝑎𝑝𝑒(x: u8) -> bool { matches!(x, b'%' | b'\\' | b'_') }
+pub const fn 𝑛𝑒𝑒𝑑_𝑒𝑠𝑐𝑎𝑝𝑒(ch: u8) -> bool { matches!(ch, b'%' | b'\\' | b'_') }
 
 pub fn 𝑒𝑠𝑐𝑎𝑝𝑒(s: &str) -> String {
     let c = s.bytes().filter(|&x| 𝑛𝑒𝑒𝑑_𝑒𝑠𝑐𝑎𝑝𝑒(x)).count();
@@ -98,7 +98,7 @@ pub fn 𝑒𝑠𝑐𝑎𝑝𝑒(s: &str) -> String {
     unsafe { String::from_utf8_unchecked(buf) }
 }
 
-pub fn 𝑒𝑠𝑐𝑎𝑝𝑒_𝚛𝚊𝚠(s: &str) -> Cow<'_, str> {
+fn 𝑒𝑠𝑐𝑎𝑝𝑒_𝚛𝚊𝚠(s: &str) -> Cow<'_, str> {
     let c = s.bytes().filter(|&x| 𝑛𝑒𝑒𝑑_𝑒𝑠𝑐𝑎𝑝𝑒(x)).count();
     if c == 0 { return Cow::Borrowed(s); }
     let mut buf = Vec::with_capacity(s.len() + c);
@@ -123,4 +123,31 @@ pub fn 𝑒𝑠𝑐𝑎𝑝𝑒_𝚕𝚊𝚣𝚢(s: &str) -> Option<Cow<'_, str>
         }
     }
     Some(t)
+}
+
+pub mod jsonb {
+    use std::borrow::Cow;
+
+    const fn need_escape_regex(ch: u8) -> bool {
+        matches!(ch, b'$' | b'('..=b'+' | b'.' | b'?' | b'['..=b'^' | b'{'..=b'}')
+    }
+
+    fn make_jsonb_path_match_query_inner(s: &str) -> Cow<'_, str> {
+        let c = s.bytes().filter(|&x| need_escape_regex(x)).count();
+        if c == 0 { return Cow::Borrowed(s); }
+        let mut buf = Vec::with_capacity(s.len() + c);
+        for b in s.bytes() {
+            if need_escape_regex(b) { buf.push(b'\\'); }
+            buf.push(b);
+        }
+        unsafe { Cow::Owned(String::from_utf8_unchecked(buf)) }
+    }
+
+    pub fn make_jsonb_path_match_query(s: &str) -> String {
+        let mut ret = "$.*.title like_regex ".to_owned();
+        let inner = make_jsonb_path_match_query_inner(s);
+        let _ = serde_json::to_writer(unsafe { ret.as_mut_vec() }, &*inner);
+        ret.push_str(" flag \"i\"");
+        ret
+    }
 }

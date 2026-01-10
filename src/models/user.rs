@@ -88,11 +88,11 @@ impl User {
         }
     }
 
-    pub async fn list(skip: u64, take: u64, db: &mut Client) -> DBResult<Vec<Self>> {
+    pub async fn list(skip: i64, take: i64, db: &mut Client) -> DBResult<Vec<Self>> {
         pub const SQL: &str = "select uid, password, username, email, register_time, ac, nickname, bio, avatar_info from lean4oj.users where username != '' order by ac desc, uid offset $1 limit $2";
 
         let stmt = db.prepare_static(SQL.into()).await?;
-        let stream = db.query_raw(&stmt, [skip.min(i64::MAX.cast_unsigned()).cast_signed(), take.min(100).cast_signed()]).await?;
+        let stream = db.query_raw(&stmt, [skip, take]).await?;
         stream.and_then(|row| ready(Self::try_from(row))).try_collect().await
     }
 

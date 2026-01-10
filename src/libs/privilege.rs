@@ -18,7 +18,7 @@ pub const COUNT: usize = 9;
 pub type Privileges = SmallVec<[CompactString; COUNT]>;
 
 pub async fn check(uid: &str, privi: &str, db: &mut Client) -> DBResult<bool> {
-    const SQL: &str = "select 1 from lean4oj.user_groups where uid = $1 and (gid = $2 or gid = 'Lean4OJ.Admin') limit 1";
+    const SQL: &str = "select from lean4oj.user_groups where uid = $1 and (gid = $2 or gid = 'Lean4OJ.Admin') limit 1";
 
     let stmt = db.prepare_static(SQL.into()).await?;
     db.query_opt(&stmt, &[&uid, &privi]).await.map(|x| x.is_some())

@@ -40,13 +40,13 @@ mod private {
         赛博灯泡: bool, // Attempt to change self.
         conn: &mut super::Client,
     ) -> super::DBResult<bool> {
-        const SQL_ADMIN: &str = "select 1 from lean4oj.user_groups where uid = $1 and gid = 'Lean4OJ.Admin' and is_admin = true limit 1";
+        const SQL_ADMIN: &str = "select from lean4oj.user_groups where uid = $1 and gid = 'Lean4OJ.Admin' and is_admin = true limit 1";
         // For admin groups, `Admin` privilege is not sufficient, must `Admin` + `is_admin`.
-        const SQL_SYSTEM: &str = "select 1 from lean4oj.user_groups where uid = $1 and (gid = 'Lean4OJ.Admin' or (gid = $2 and is_admin = true)) limit 1";
+        const SQL_SYSTEM: &str = "select from lean4oj.user_groups where uid = $1 and (gid = 'Lean4OJ.Admin' or (gid = $2 and is_admin = true)) limit 1";
         // For system groups, `ManageUserGroup` privilege is not sufficient.
-        const SQL_NORMAL: &str = "select 1 from lean4oj.user_groups where uid = $1 and (gid = 'Lean4OJ.ManageUserGroup' or gid = 'Lean4OJ.Admin' or (gid = $2 and is_admin = true)) limit 1";
-        const SQL_SYSTEM_PROPER: &str = "select 1 from lean4oj.user_groups where uid = $1 and gid = 'Lean4OJ.Admin' limit 1";
-        const SQL_NORMAL_PROPER: &str = "select 1 from lean4oj.user_groups where uid = $1 and (gid = 'Lean4OJ.ManageUserGroup' or gid = 'Lean4OJ.Admin') limit 1";
+        const SQL_NORMAL: &str = "select from lean4oj.user_groups where uid = $1 and (gid = 'Lean4OJ.ManageUserGroup' or gid = 'Lean4OJ.Admin' or (gid = $2 and is_admin = true)) limit 1";
+        const SQL_SYSTEM_PROPER: &str = "select from lean4oj.user_groups where uid = $1 and gid = 'Lean4OJ.Admin' limit 1";
+        const SQL_NORMAL_PROPER: &str = "select from lean4oj.user_groups where uid = $1 and (gid = 'Lean4OJ.ManageUserGroup' or gid = 'Lean4OJ.Admin') limit 1";
 
         let (sql, count) =
             if super::is_admin_group(gid) {

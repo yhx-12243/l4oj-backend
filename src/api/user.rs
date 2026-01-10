@@ -149,15 +149,17 @@ async fn update_user_profile(
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct GetUserListRequest {
-    #[serde(rename = "skipCount")]
-    skip: u64,
-    #[serde(rename = "takeCount")]
-    take: u64,
+    skip_count: u64,
+    take_count: u64,
 }
 
 async fn get_user_list(req: JsonReqult<GetUserListRequest>) -> JkmxJsonResponse {
-    let Json(GetUserListRequest { skip, take }) = req?;
+    let Json(GetUserListRequest { skip_count, take_count }) = req?;
+
+    let skip = skip_count.min(i64::MAX.cast_unsigned()).cast_signed();
+    let take = take_count.min(100).cast_signed();
 
     let mut conn = get_connection().await?;
     let users = User::list(skip, take, &mut conn).await?;

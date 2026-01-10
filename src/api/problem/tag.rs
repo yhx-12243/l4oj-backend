@@ -1,5 +1,3 @@
-use core::{fmt::Write, index::Last};
-
 use axum::{Json, Router, routing::post};
 use compact_str::CompactString;
 use http::StatusCode;
@@ -18,7 +16,7 @@ use crate::{
     },
     models::{
         localedict::{LocaleDict, LocaleDictEntryOwned},
-        tag::Tag,
+        tag::{LTags, Tag},
     },
 };
 
@@ -29,23 +27,12 @@ struct GetAllTagsRequest {
 
 async fn all_tags(req: JsonReqult<GetAllTagsRequest>) -> JkmxJsonResponse {
     let Json(GetAllTagsRequest { locale }) = req?;
-    let locale = locale.as_deref();
 
     let mut conn = get_connection().await?;
     let tags = Tag::list(&mut conn).await?;
-    let mut res = r#"{"tags":["#.to_owned();
-    for tag in tags {
-        write!(
-            &mut res,
-            r#"{{"id":{},"color":{},"name":{}}},"#,
-            tag.id,
-            WithJson(&*tag.color),
-            WithJson(tag.name.apply(locale).map_or_default(|x| &**x)),
-        )?;
-    }
-    let mut res = res.into_bytes();
-    unsafe { *res.get_unchecked_mut(Last) = b']'; }
-    res.push(b'}');
+
+    let ltags = LTags { tags: tags.iter(), locale: locale.as_deref() };
+    let res = format!(r#"{{"tags":{}}}"#, WithJson(ltags));
     JkmxJsonResponse::Response(StatusCode::OK, res.into())
 }
 
