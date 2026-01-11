@@ -122,7 +122,7 @@ async fn main_inner(
             if check_password(&user.password, &salt, s.split_ascii_whitespace().nth(1)) {
                 write::main(c2s, s2c, delete, &sni, user).await
             } else {
-                return Err(format!("authentication failed for user: {uid}").into());
+                Err(format!("authentication failed for user: {uid}").into())
             }
         }
     }

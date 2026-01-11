@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use compact_str::CompactString;
 use serde::{Deserialize, Serialize, ser::SerializeSeq};
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Default, Deserialize)]
 #[repr(transparent)]
 pub struct LocaleDict<T = CompactString>(pub BTreeMap<CompactString, T>);
 

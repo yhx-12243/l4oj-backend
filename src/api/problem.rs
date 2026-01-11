@@ -180,7 +180,6 @@ async fn query_problem_set(
         && let Some(kw) = keyword__inner___
         && let Some(pid) = private::𝒾𝒹(kw) {
             if let Some(pos) = problems.iter().position(|p| p.0.pid == pid) {
-                println!("Type A");
                 private::𝝴(&mut res, &problems[pos].0, locale.as_deref())?;
                 for (p, _) in &problems[..pos] {
                     private::𝝴(&mut res, p, locale.as_deref())?;
@@ -189,7 +188,6 @@ async fn query_problem_set(
                     private::𝝴(&mut res, p, locale.as_deref())?;
                 }
             } else {
-                println!("Type B");
                 let problem = if privi {
                     Problem::by_pid(pid, &mut conn).await
                 } else {
@@ -203,7 +201,6 @@ async fn query_problem_set(
                 }
             }
         } else {
-            println!("Type C");
             for (p, _) in &problems {
                 private::𝝴(&mut res, p, locale.as_deref())?;
             }

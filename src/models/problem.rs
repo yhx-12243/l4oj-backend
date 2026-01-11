@@ -204,8 +204,6 @@ impl Problem {
         }
         sql.push_str(" order by pid desc) offset $1 limit $2");
 
-        println!("🌰 {sql}");
-
         let stmt = db.prepare_static(sql.into()).await?;
         let stream = db.query_raw(&stmt, args).await?;
         stream.and_then(|row| ready(𝒯(row))).try_collect().await
@@ -224,8 +222,6 @@ impl Problem {
             args.push(unsafe { core::mem::transmute::<&&'a [i32], &'a &'a [i32]>(tag_ids) });
         }
         sql.push(')');
-
-        println!("🦝 {sql}");
 
         let stmt = db.prepare_static(sql.into()).await?;
         let row = db.query_one(&stmt, &args).await?;

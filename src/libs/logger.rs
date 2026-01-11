@@ -47,7 +47,7 @@ fn format(buf: &mut Formatter, record: &Record<'_>) -> std::io::Result<()> {
             n @ 130.. => &unsafe { String::from_utf8_unchecked(vec![b' '; n - 1]) },
         }
     } else {
-        let len = module_path.map_or(0, str::len) + target.len() + 1;
+        let len = module_path.map_or_default(str::len) + target.len() + 1;
         &pad(target, pad_num(len))
     };
 

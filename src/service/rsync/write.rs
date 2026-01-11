@@ -35,8 +35,7 @@ use crate::{
         db::get_connection,
         error::BoxedStdError,
         fs::{mkdir, unmap_send},
-        olean::lean_version,
-        privilege,
+        olean, privilege,
         validate::is_lean_id,
     },
     models::user::User,
@@ -282,7 +281,7 @@ where
             return Err(format!("{} bytes missing", buf.len()).into());
         }
         let buf = unsafe { slice::from_raw_parts(g.0 as *const u8, entry.size) };
-        if lean_version(buf).is_none() {
+        if olean::lean_version(buf).is_none() {
             return Err(format!(
                 "{}: not a valid olean file",
                 unsafe { OsStr::from_encoded_bytes_unchecked(target) }.display(),

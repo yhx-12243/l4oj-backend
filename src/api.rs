@@ -11,6 +11,7 @@ mod group;
 mod homepage;
 mod judge_client;
 mod problem;
+mod submission;
 mod user;
 
 pub fn all() -> Router {
@@ -27,6 +28,7 @@ pub fn all() -> Router {
         .nest("/homepage", homepage::router(header))
         .nest("/judgeClient", judge_client::router(header))
         .nest("/problem", problem::router(header))
+        .nest("/submission", submission::router(header))
         .nest("/user", user::router(header))
         .layer(cors)
 }

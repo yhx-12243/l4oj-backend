@@ -69,7 +69,7 @@ struct HomepageRequest {
     locale: Option<CompactString>,
 }
 
-const ANNOUNCEMENT_IDS: [u32; 4] = [1, 2, 3, 4];
+const ANNOUNCEMENT_IDS: [u32; 5] = [1, 2, 3, 4, 12];
 
 #[derive(Serialize)]
 struct Inner {

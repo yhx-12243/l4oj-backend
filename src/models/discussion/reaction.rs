@@ -8,7 +8,7 @@ use tokio_postgres::{Client, types::ToSql};
 
 use crate::libs::db::{DBResult, ToSqlIterUnsafe};
 
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 pub enum ReactionType {
     Discussion,
     DiscussionReply,

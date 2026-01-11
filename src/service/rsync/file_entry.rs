@@ -38,7 +38,6 @@ impl FileEntry {
     }
 }
 
-#[cfg(debug_assertions)]
 impl fmt::Debug for FileEntry {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct_field5_finish(
