@@ -121,7 +121,7 @@ mod service;
 
 #[tokio::main]
 async fn main() -> std::io::Result<!> {
-    use axum::{Router, extract::DefaultBodyLimit};
+    use axum::{Router, extract::DefaultBodyLimit, routing::get};
     use futures_util::FutureExt;
     use hyper::server::conn;
     use hyper_util::rt::TokioIo;
@@ -139,10 +139,11 @@ async fn main() -> std::io::Result<!> {
     libs::session::init();
 
     tokio::spawn(service::rsync::main().map(Result::unwrap));
+    tokio::spawn(service::submission_deposit::main().map(Result::unwrap));
 
     let mut app: Router = Router::new()
-        .nest("/api", api::all());
-        // .route("/lean{*path}", get(api::fs::static_with_permission));
+        .nest("/api", api::all())
+        .route("/lean/submission/{*path}", get(api::fs::submission));
 
     app = app.layer(DefaultBodyLimit::disable());
 

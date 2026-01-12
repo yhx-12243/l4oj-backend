@@ -341,16 +341,16 @@ pub async fn main(
             TOTAL_FILE_LIMIT
         }
     };
-    let mut buf = format!(env!("OLEAN_ROOT"), user.uid);
+    let mut buf = format!("{}/lean/{}/", env!("OLEAN_ROOT"), user.uid);
     let (mut fl, acc) = generate_file_list(
         &mut rx,
-        unsafe { buf.get_unchecked(const { env!("OLEAN_ROOT").len() - 4 }..) },
+        unsafe { buf.get_unchecked(const { env!("OLEAN_ROOT").len() + 5 }..) },
         limit,
     ).await?;
     fl.sort();
     unsafe { *buf.as_mut_vec().get_unchecked_mut(Last) = 0; }
     if unsafe { libc::mkdir(buf.as_ptr().cast(),
-        cfg_select!(target_os = "linux" => { 0o700 } _ => { 0o777 })
+        cfg_select!(target_os = "linux" => { 0o770 } _ => { 0o777 })
     ) } != 0 {
         let err = io::Error::last_os_error();
         if err.raw_os_error() != Some(libc::EEXIST) { return Err(err.into()); }

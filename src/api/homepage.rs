@@ -91,7 +91,7 @@ struct HomepageResponse<'a> {
 }
 
 async fn get_latest_updated_problems(locale: Option<&str>, db: &mut Client) -> DBResult<SmallVec<[Inner; N_PROBLEMS]>> {
-    const SQL: &str = "select pid, is_public, public_at, owner, pcontent, sub, ac, submittable, jb from lean4oj.problems where is_public = true order by public_at desc limit $1";
+    const SQL: &str = "select pid, is_public, public_at, owner, pcontent, sub, ac, submittable, jb from lean4oj.problems where is_public order by public_at desc limit $1";
 
     let stmt = db.prepare_static(SQL.into()).await?;
     #[allow(clippy::cast_possible_wrap)]

@@ -3,28 +3,64 @@ use axum::{
     extract::RawPathParams,
     response::{IntoResponse, Response},
 };
-use http::{HeaderMap, HeaderValue, StatusCode, header::AUTHORIZATION};
+use bytes::Bytes;
+use http::{HeaderValue, StatusCode};
 
-use crate::libs::{auth::Session_, constants::X_ACCEL_REDIRECT, fs};
+use crate::{
+    libs::{
+        auth::Session_,
+        constants::X_ACCEL_REDIRECT,
+        db::{DBResult, get_connection},
+        privilege,
+    },
+    models::user::User,
+};
 
-pub async fn static_with_permission(
-    header: HeaderMap,
-    params: RawPathParams,
+pub async fn submission(
     Session_(session): Session_,
+    params: RawPathParams,
 ) -> Response {
-    let Some((deref!("path"), path)) = params.into_iter().next() else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, "Invalid route (proxy).").into_response();
-    };
-    if fs::is_read_forbidden(&path, session).await {
-        return (
-            if header.contains_key(AUTHORIZATION) {
-                (StatusCode::FORBIDDEN, "You don't have permission to view this olean file.")
-            } else {
-                (StatusCode::UNAUTHORIZED, "You should provide a Bearer Authorization Header.")
+    let Some((deref!("path"), path)) = params.into_iter().next() else { return (StatusCode::INTERNAL_SERVER_ERROR, "Invalid route (proxy).").into_response() };
+
+    let pos = path.find('/').unwrap_or(path.len());
+    let id_str = unsafe { path.get_unchecked(..pos) };
+    let Ok(sid) = id_str.parse::<u32>() else { return StatusCode::NOT_FOUND.into_response() };
+
+    let Ok(mut conn) = get_connection().await else { return (StatusCode::INTERNAL_SERVER_ERROR, "Database not available.").into_response() };
+
+    let e: DBResult<()> = try {
+        const SQL_USER: &str = "select from lean4oj.submissions natural join lean4oj.problems where sid = $1 and (owner = $2 or is_public)";
+        const SQL_GUEST: &str = "select from lean4oj.submissions natural join lean4oj.problems where sid = $1 and is_public";
+
+        let maybe_user = User::from_maybe_session(&session, &mut conn).await?;
+        let uid = maybe_user.as_ref().map(|u| &*u.uid);
+        if let Some(uid) = uid {
+            if !privilege::check(uid, "Lean4OJ.ManageProblem", &mut conn).await? {
+                let stmt = conn.prepare_static(SQL_USER.into()).await?;
+                if conn.query_opt(&stmt, &[&sid.cast_signed(), &uid]).await?.is_none() {
+                    return StatusCode::NOT_FOUND.into_response();
+                }
             }
-        ).into_response()
-    }
+        } else {
+            let stmt = conn.prepare_static(SQL_GUEST.into()).await?;
+            if conn.query_opt(&stmt, &[&sid.cast_signed()]).await?.is_none() {
+                return StatusCode::NOT_FOUND.into_response();
+            }
+        }
+    };
+    if let Err(e) = e { return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(); }
+
+    let bytes = sid.to_le_bytes();
+    let redirect = format!(
+        "/internal-bf9d9f9f9f1b0b0f/{:02x}/{:02x}/{:02x}/{:02x}{}",
+        bytes[3], bytes[2], bytes[1], bytes[0],
+        unsafe { path.get_unchecked(pos..) },
+    );
+
     let mut res = Response::new(Body::empty());
-    res.headers_mut().insert(X_ACCEL_REDIRECT, const { HeaderValue::from_static("@lean") });
+    res.headers_mut().insert(
+        X_ACCEL_REDIRECT,
+        unsafe { HeaderValue::from_maybe_shared_unchecked(Bytes::from(redirect)) },
+    );
     res
 }

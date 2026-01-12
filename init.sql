@@ -22,6 +22,8 @@ ALTER TABLE ONLY lean4oj.user_preference DROP CONSTRAINT user_preference_uid_fke
 ALTER TABLE ONLY lean4oj.user_information DROP CONSTRAINT user_information_uid_fkey;
 ALTER TABLE ONLY lean4oj.user_groups DROP CONSTRAINT user_groups_uid_fkey;
 ALTER TABLE ONLY lean4oj.user_groups DROP CONSTRAINT user_groups_gid_fkey;
+ALTER TABLE ONLY lean4oj.submissions DROP CONSTRAINT submissions_submitter_fkey;
+ALTER TABLE ONLY lean4oj.submissions DROP CONSTRAINT submissions_pid_fkey;
 ALTER TABLE ONLY lean4oj.problems DROP CONSTRAINT problems_owner_fkey;
 ALTER TABLE ONLY lean4oj.problem_tags DROP CONSTRAINT problem_tags_tid_fkey;
 ALTER TABLE ONLY lean4oj.problem_tags DROP CONSTRAINT problem_tags_pid_fkey;
@@ -40,6 +42,7 @@ ALTER TABLE ONLY lean4oj.user_preference DROP CONSTRAINT user_preference_pkey;
 ALTER TABLE ONLY lean4oj.user_information DROP CONSTRAINT user_information_pkey;
 ALTER TABLE ONLY lean4oj.user_groups DROP CONSTRAINT user_groups_pkey;
 ALTER TABLE ONLY lean4oj.tags DROP CONSTRAINT tags_pkey;
+ALTER TABLE ONLY lean4oj.submissions DROP CONSTRAINT submissions_pkey;
 ALTER TABLE ONLY lean4oj.problems DROP CONSTRAINT problems_pkey;
 ALTER TABLE ONLY lean4oj.problem_tags DROP CONSTRAINT problem_tags_pkey;
 ALTER TABLE ONLY lean4oj.groups DROP CONSTRAINT groups_pkey;
@@ -47,6 +50,7 @@ ALTER TABLE ONLY lean4oj.discussions DROP CONSTRAINT discussions_pkey;
 ALTER TABLE ONLY lean4oj.discussion_replies DROP CONSTRAINT discussion_replies_pkey;
 ALTER TABLE ONLY lean4oj.discussion_reactions DROP CONSTRAINT discussion_reactions_pkey;
 ALTER TABLE lean4oj.tags ALTER COLUMN id DROP DEFAULT;
+ALTER TABLE lean4oj.submissions ALTER COLUMN sid DROP DEFAULT;
 ALTER TABLE lean4oj.problems ALTER COLUMN pid DROP DEFAULT;
 ALTER TABLE lean4oj.discussions ALTER COLUMN id DROP DEFAULT;
 ALTER TABLE lean4oj.discussion_replies ALTER COLUMN id DROP DEFAULT;
@@ -56,6 +60,8 @@ DROP TABLE lean4oj.user_information;
 DROP TABLE lean4oj.user_groups;
 DROP SEQUENCE lean4oj.tags_id_seq;
 DROP TABLE lean4oj.tags;
+DROP SEQUENCE lean4oj.submissions_sid_seq;
+DROP TABLE lean4oj.submissions;
 DROP SEQUENCE lean4oj.problems_pid_seq;
 DROP TABLE lean4oj.problems;
 DROP TABLE lean4oj.problem_tags;
@@ -217,6 +223,45 @@ ALTER SEQUENCE lean4oj.problems_pid_seq OWNED BY lean4oj.problems.pid;
 
 
 --
+-- Name: submissions; Type: TABLE; Schema: lean4oj; Owner: -
+--
+
+CREATE TABLE lean4oj.submissions (
+    sid integer NOT NULL,
+    pid integer NOT NULL,
+    submitter character varying(24) NOT NULL COLLATE public.case_insensitive,
+    "time" timestamp without time zone NOT NULL,
+    module_name text NOT NULL,
+    const_name text NOT NULL,
+    lean_toolchain character varying(24) NOT NULL,
+    status "char" DEFAULT (0)::"char" NOT NULL,
+    message text DEFAULT ''::text NOT NULL,
+    answer_size bigint NOT NULL,
+    answer_hash bytea NOT NULL
+);
+
+
+--
+-- Name: submissions_sid_seq; Type: SEQUENCE; Schema: lean4oj; Owner: -
+--
+
+CREATE SEQUENCE lean4oj.submissions_sid_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: submissions_sid_seq; Type: SEQUENCE OWNED BY; Schema: lean4oj; Owner: -
+--
+
+ALTER SEQUENCE lean4oj.submissions_sid_seq OWNED BY lean4oj.submissions.sid;
+
+
+--
 -- Name: tags; Type: TABLE; Schema: lean4oj; Owner: -
 --
 
@@ -322,6 +367,13 @@ ALTER TABLE ONLY lean4oj.problems ALTER COLUMN pid SET DEFAULT nextval('lean4oj.
 
 
 --
+-- Name: submissions sid; Type: DEFAULT; Schema: lean4oj; Owner: -
+--
+
+ALTER TABLE ONLY lean4oj.submissions ALTER COLUMN sid SET DEFAULT nextval('lean4oj.submissions_sid_seq'::regclass);
+
+
+--
 -- Name: tags id; Type: DEFAULT; Schema: lean4oj; Owner: -
 --
 
@@ -418,6 +470,14 @@ ALTER TABLE ONLY lean4oj.problem_tags
 
 ALTER TABLE ONLY lean4oj.problems
     ADD CONSTRAINT problems_pkey PRIMARY KEY (pid);
+
+
+--
+-- Name: submissions submissions_pkey; Type: CONSTRAINT; Schema: lean4oj; Owner: -
+--
+
+ALTER TABLE ONLY lean4oj.submissions
+    ADD CONSTRAINT submissions_pkey PRIMARY KEY (sid);
 
 
 --
@@ -558,6 +618,22 @@ ALTER TABLE ONLY lean4oj.problem_tags
 
 ALTER TABLE ONLY lean4oj.problems
     ADD CONSTRAINT problems_owner_fkey FOREIGN KEY (owner) REFERENCES lean4oj.users(uid);
+
+
+--
+-- Name: submissions submissions_pid_fkey; Type: FK CONSTRAINT; Schema: lean4oj; Owner: -
+--
+
+ALTER TABLE ONLY lean4oj.submissions
+    ADD CONSTRAINT submissions_pid_fkey FOREIGN KEY (pid) REFERENCES lean4oj.problems(pid) MATCH FULL ON UPDATE CASCADE;
+
+
+--
+-- Name: submissions submissions_submitter_fkey; Type: FK CONSTRAINT; Schema: lean4oj; Owner: -
+--
+
+ALTER TABLE ONLY lean4oj.submissions
+    ADD CONSTRAINT submissions_submitter_fkey FOREIGN KEY (submitter) REFERENCES lean4oj.users(uid) MATCH FULL;
 
 
 --

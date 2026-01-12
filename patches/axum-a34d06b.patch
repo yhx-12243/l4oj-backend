@@ -315,7 +315,7 @@ index 95564823..93ec4428 100644
      type Error = Infallible;
  
 diff --git a/axum/Cargo.toml b/axum/Cargo.toml
-index e791dbc4..975a7672 100644
+index f807384e..8de49b43 100644
 --- a/axum/Cargo.toml
 +++ b/axum/Cargo.toml
 @@ -111,13 +111,12 @@ http = "1.0.0"
@@ -337,8 +337,8 @@ index e791dbc4..975a7672 100644
  multer = { version = "3.0.0", optional = true }
  reqwest = { version = "0.12", optional = true, default-features = false, features = ["json", "stream", "multipart"] }
  serde_html_form = { version = "0.4.0", optional = true, default-features = false, features = ["std"] }
--serde_json = { version = "1.0", features = ["raw_value"], optional = true }
-+serde_json = { version = "1.0", optional = true }
+-serde_json = { version = "1.0.29", features = ["raw_value"], optional = true }
++serde_json = { version = "1.0.29", optional = true }
  serde_path_to_error = { version = "0.1.8", optional = true }
  sha1 = { version = "0.10", optional = true }
  tokio = { package = "tokio", version = "1.44", features = ["time"], optional = true }
@@ -504,10 +504,10 @@ index 192e1e58..ccf8ae11 100644
  }
  
 diff --git a/axum/src/extract/ws.rs b/axum/src/extract/ws.rs
-index 312fb87b..74e9aefe 100644
+index 2eb3b2af..cbe42425 100644
 --- a/axum/src/extract/ws.rs
 +++ b/axum/src/extract/ws.rs
-@@ -117,6 +117,10 @@ use tokio_tungstenite::{
+@@ -119,6 +119,10 @@ use tokio_tungstenite::{
      },
      WebSocketStream,
  };
@@ -518,7 +518,7 @@ index 312fb87b..74e9aefe 100644
  
  /// Extractor for establishing WebSocket connections.
  ///
-@@ -546,8 +550,8 @@ impl WebSocket {
+@@ -549,8 +553,8 @@ impl WebSocket {
      /// Receive another message.
      ///
      /// Returns `None` if the stream has closed.
@@ -529,7 +529,7 @@ index 312fb87b..74e9aefe 100644
      }
  
      /// Send a message.
-@@ -562,6 +566,10 @@ impl WebSocket {
+@@ -565,6 +569,10 @@ impl WebSocket {
      pub fn protocol(&self) -> Option<&HeaderValue> {
          self.protocol.as_ref()
      }
@@ -540,7 +540,7 @@ index 312fb87b..74e9aefe 100644
  }
  
  impl FusedStream for WebSocket {
-@@ -611,134 +619,6 @@ impl Sink<Message> for WebSocket {
+@@ -614,134 +622,6 @@ impl Sink<Message> for WebSocket {
      }
  }
  
@@ -675,7 +675,7 @@ index 312fb87b..74e9aefe 100644
  /// A WebSocket message.
  //
  // This code comes from https://github.com/snapview/tungstenite-rs/blob/master/src/protocol/message.rs and is under following license:
-@@ -808,29 +688,21 @@ pub enum Message {
+@@ -811,29 +691,21 @@ pub enum Message {
  impl Message {
      fn into_tungstenite(self) -> ts::Message {
          match self {

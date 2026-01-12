@@ -142,7 +142,7 @@ async fn query_problem_set(
 
     let extend = |mut sql: String, mut args: SmallVec<[&'static (dyn ToSql + Sync); 8]>| -> (String, SmallVec<[&'static (dyn ToSql + Sync); 8]>) {
         if nonpublic == Some(true) {
-            sql.push_str(" and is_public = false");
+            sql.push_str(" and not is_public");
         }
         if let Some(ref kw) = ekw {
             let _ = write!(&mut sql, " and jsonb_path_match(pcontent, ${})", args.len() + 1);
@@ -158,12 +158,12 @@ async fn query_problem_set(
         }
         if !privi {
             if let Some(ref uid) = uid {
-                let _ = write!(&mut sql, " and (owner = ${} or is_public = true)", args.len() + 1);
+                let _ = write!(&mut sql, " and (owner = ${} or is_public)", args.len() + 1);
                 args.push(
                     unsafe { core::mem::transmute::<&&str, &'static &str>(uid) } as _
                 );
             } else {
-                sql.push_str(" and is_public = true");
+                sql.push_str(" and is_public");
             }
         }
         (sql, args)
@@ -456,8 +456,8 @@ async fn set_problem_publicness(
     Session_(session): Session_,
     req: JsonReqult<SetProblemPublicnessRequest>,
 ) -> JkmxJsonResponse {
-    const SQL_PUBLIC: &str = "update lean4oj.problems set is_public = true, public_at = $1 where pid = $2 and is_public = false";
-    const SQL_PRIVATE: &str = "update lean4oj.problems set is_public = false where pid = $1 and is_public = true";
+    const SQL_PUBLIC: &str = "update lean4oj.problems set is_public = true, public_at = $1 where pid = $2 and not is_public";
+    const SQL_PRIVATE: &str = "update lean4oj.problems set is_public = false where pid = $1 and is_public";
 
     let Json(SetProblemPublicnessRequest { problem_id, is_public }) = req?;
 

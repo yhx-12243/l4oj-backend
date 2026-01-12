@@ -40,10 +40,23 @@ pub fn lean_version(payload: &[u8]) -> Option<&'static str> {
     payload.first_chunk().and_then(lean_version_80)
 }
 
+pub fn 𝑔𝑒𝑡_𝑜𝑙𝑒𝑎𝑛_𝑝𝑎𝑡ℎ(uid: &str, name: &str) -> String {
+    let mut s = String::with_capacity(env!("OLEAN_ROOT").len() + uid.len() + name.len() + 13);
+    s.push_str(env!("OLEAN_ROOT"));
+    s.push_str("/lean/");
+    s.push_str(uid);
+    for part in name.split('.') {
+        s.push('/');
+        s.push_str(part);
+    }
+    s.push_str(".olean");
+    s
+}
+
 #[derive(Clone, Copy)]
 pub struct OleanMeta<'a> {
     data: &'a [u8],
-    version: &'static str,
+    pub version: &'static str,
     base: usize,
     sections: &'a [usize; 7],
 }
@@ -187,23 +200,7 @@ mod tests {
 
     use super::{init, parse_consts, parse_imports, parse_meta};
 
-    const OLEANS: [&str; 16] = [
-        "/Volumes/caseSensitive/test/server_frontend/public/lean/topology/cardinal_A₂.olean",
-        "/Volumes/caseSensitive/test/server_frontend/public/lean/algebra/ring/Dec26.olean",
-        "/Volumes/caseSensitive/test/server_frontend/public/lean/analysis/real/hasRootOddDegree.olean",
-        "/Volumes/caseSensitive/test/server_frontend/public/lean/topology/Filter1.olean",
-        "/Volumes/caseSensitive/test/server_frontend/public/lean/analysis/measure/Cantor.olean",
-        "/Volumes/caseSensitive/test/server_frontend/public/lean/algebra/field/separable_perfect.olean",
-        "/Volumes/caseSensitive/test/server_frontend/public/lean/analysis/measure/continuum.olean",
-        "/Volumes/caseSensitive/test/server_frontend/public/lean/algebra/field/algclosure_realclosed.olean",
-        "/Volumes/caseSensitive/test/server_frontend/public/lean/algebra/field/cos2π_9.olean",
-        "/Volumes/caseSensitive/test/server_frontend/public/lean/IMO2025/IMO1989P1.olean",
-        "/Volumes/caseSensitive/test/server_frontend/public/lean/algebra/field/2dimext.olean",
-        "/Volumes/caseSensitive/test/server_frontend/public/lean/analysis/real/AC.olean",
-        "/Volumes/caseSensitive/test/server_frontend/public/lean/analysis/real/Wirtinger.olean",
-        "/tmp/lean/lean/Mathlib/FieldTheory/Isaacs.olean",
-        "/tmp/lean/lean/Mathlib/FieldTheory/Isaacs.olean.server",
-        "/tmp/lean/lean/Mathlib/FieldTheory/Isaacs.olean.private",
+    const OLEANS: [&str; 0] = [
     ];
 
     #[test]

@@ -145,7 +145,7 @@ impl Problem {
     }
 
     pub async fn by_pid_uid(pid: i32, uid: &str, db: &mut Client) -> DBResult<Option<Self>> {
-        const SQL: &str = "select pid, is_public, public_at, owner, pcontent, sub, ac, submittable, jb from lean4oj.problems where pid = $1 and (owner = $2 or is_public = true)";
+        const SQL: &str = "select pid, is_public, public_at, owner, pcontent, sub, ac, submittable, jb from lean4oj.problems where pid = $1 and (owner = $2 or is_public)";
 
         let stmt = db.prepare_static(SQL.into()).await?;
         let result = match db.query_opt(&stmt, &[&pid, &uid]).await? {

@@ -67,6 +67,15 @@ impl_lsz!(openssl::error::ErrorStack);
 impl_lsz!(tokio::task::JoinError, StatusCode::INTERNAL_SERVER_ERROR);
 impl_lsz!(tower_sessions_core::session::Error, StatusCode::INTERNAL_SERVER_ERROR);
 
+impl<T> FromResidual<Result<Infallible, tokio::sync::mpsc::error::SendError<T>>> for JkmxJsonResponse
+where
+    T: Send + Sync + 'static,
+{
+    fn from_residual(Err(err): Result<Infallible, tokio::sync::mpsc::error::SendError<T>>) -> Self {
+        Self::Error(StatusCode::INTERNAL_SERVER_ERROR, err.into())
+    }
+}
+
 macro_rules! impl_zsxn {
     ($ty:ty) => {
         impl FromResidual<Result<Infallible, $ty>> for JkmxJsonResponse {

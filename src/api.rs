@@ -6,7 +6,7 @@ use crate::libs::constants::APPLICATION_JSON_UTF_8;
 
 mod auth;
 mod discussion;
-// pub mod fs;
+pub mod fs;
 mod group;
 mod homepage;
 mod judge_client;

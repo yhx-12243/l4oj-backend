@@ -297,12 +297,12 @@ async fn query_discussions(
         }
         if problem_id.is_some() && !privi {
             if let Some(ref uid) = s_uid {
-                let _ = write!(&mut sql, " and (owner = ${} or is_public = true)", args.len() + 1);
+                let _ = write!(&mut sql, " and (owner = ${} or is_public)", args.len() + 1);
                 args.push(
                     unsafe { core::mem::transmute::<&&str, &'static &str>(uid) } as _
                 );
             } else {
-                sql.push_str(" and is_public = true");
+                sql.push_str(" and is_public");
             }
         }
         (sql, args)
