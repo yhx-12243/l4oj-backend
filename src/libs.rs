@@ -5,6 +5,9 @@ pub mod db;
 pub mod emoji;
 pub mod error;
 pub mod fs;
+pub mod judger {
+    pub mod task;
+}
 pub mod logger;
 pub mod lquery;
 pub mod olean;

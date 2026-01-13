@@ -1,5 +1,5 @@
 diff --git a/postgres-protocol/Cargo.toml b/postgres-protocol/Cargo.toml
-index 6d07df12..54f0df96 100644
+index 59e218ea..accfff39 100644
 --- a/postgres-protocol/Cargo.toml
 +++ b/postgres-protocol/Cargo.toml
 @@ -23,5 +23,4 @@ md-5 = "0.10"
@@ -352,12 +352,12 @@ index 8126b1db..f2ca0de6 100644
      }
  
 diff --git a/tokio-postgres/Cargo.toml b/tokio-postgres/Cargo.toml
-index 00af1bc2..cb515750 100644
+index 14d085bc..57cfe387 100644
 --- a/tokio-postgres/Cargo.toml
 +++ b/tokio-postgres/Cargo.toml
 @@ -2,14 +2,14 @@
  name = "tokio-postgres"
- version = "0.7.15"
+ version = "0.7.16"
  authors = ["Steven Fackler <sfackler@gmail.com>"]
 -edition = "2021"
 +edition = "2024"

@@ -107,6 +107,7 @@
     yeet_expr,
 )]
 #![allow(
+    clippy::transmute_ptr_to_ptr,
     confusable_idents,
     incomplete_features,
     mixed_script_confusables,

@@ -1,4 +1,8 @@
-use core::fmt::Write;
+use core::{
+    fmt::Write,
+    pin::Pin,
+    task::{Context, Poll, ready},
+};
 use std::{
     borrow::Cow,
     collections::VecDeque,
@@ -10,13 +14,23 @@ use std::{
 
 use bytes::Bytes;
 use compact_str::CompactString;
+use futures_util::Stream;
 use hashbrown::{HashSet, hash_set::Entry};
+use hyper::body::Frame;
 use openssl::sha::Sha256;
+use parking_lot::Mutex;
 use serde::Deserialize;
-use tokio::sync::mpsc;
+use smallvec::SmallVec;
+use tokio::sync::{mpsc, oneshot};
 
+#[allow(clippy::enum_glob_use)]
 use crate::{
-    libs::{db::get_connection, error::BoxedStdError, olean},
+    libs::{
+        db::get_connection,
+        error::BoxedStdError,
+        judger::task::{LeanAxiom, Task as JudgeTask},
+        olean,
+    },
     models::submission::{
         Submission,
         SubmissionMessageAction::{self, *},
@@ -26,6 +40,7 @@ use crate::{
 
 #[derive(Deserialize)]
 pub struct Jb {
+    axioms: SmallVec<[LeanAxiom; 4]>,
     checker: String,
 }
 
@@ -35,13 +50,16 @@ pub struct Task {
     pub module_name: CompactString,
     pub const_name: CompactString,
     pub imports: Vec<CompactString>,
+    pub version: &'static str,
     pub hash: [u8; 32],
     pub checker: Bytes,
 }
 
 static TX: OnceLock<mpsc::UnboundedSender<Task>> = OnceLock::new();
+static FOOD: Mutex<Vec<oneshot::Sender<JudgeTask>>> = Mutex::new(Vec::new());
 
 #[inline(always)]
+#[allow(clippy::result_large_err)]
 pub fn transmit(task: Task) -> Result<(), mpsc::error::SendError<Task>> {
     {
         #[cfg(feature = "build-std")]
@@ -57,6 +75,7 @@ fn cache_path(hash: &[u8; 32]) -> String {
     s.push_str("/cache/");
     let _ = write!(&mut s, "{:02x}", hash[0]);
     s.push('/');
+    #[allow(clippy::needless_range_loop)]
     for i in 1..32 {
         let _ = write!(&mut s, "{:02x}", hash[i]);
     }
@@ -172,9 +191,10 @@ fn deposit_inner(task: Task, checker: String) -> io::Result<(SubmissionStatus, S
     Ok((Deposited, NoAction))
 }
 
-async fn deposit(task @ Task { sid, .. }: Task) -> Result<(), BoxedStdError> {
-    let checker = match serde_json::from_slice(&task.checker) {
-        Ok(Jb { checker }) => checker,
+#[allow(clippy::significant_drop_tightening)]
+async fn deposit(task @ Task { sid, version, .. }: Task) -> Result<(), BoxedStdError> {
+    let Jb { axioms, checker } = match serde_json::from_slice(&task.checker) {
+        Ok(r) => r,
         Err(e) => return Err(e.into()),
     };
     let mut conn = get_connection().await?;
@@ -184,7 +204,62 @@ async fn deposit(task @ Task { sid, .. }: Task) -> Result<(), BoxedStdError> {
     let (status, action) = tokio::task::spawn_blocking(|| deposit_inner(task, checker)).await??;
 
     let mut conn = get_connection().await?;
-    Submission::report_status(sid, status, action, &mut conn).await.map_err(Into::into)
+    let final_status = if status == Deposited {
+        let mut guard = FOOD.lock();
+        #[allow(clippy::transmute_undefined_repr)]
+        let axioms = unsafe { core::mem::transmute::<SmallVec<[LeanAxiom; 4]>, SmallVec<[CompactString; 4]>>(axioms) };
+        let mut version4 = CompactString::with_capacity(version.len() + 1);
+        version4.push('4');
+        version4.push_str(version);
+        loop {
+            let n = guard.len();
+            if n == 0 { break Deposited; }
+            let idx = rand::random_range(..n);
+            let sender = guard.swap_remove(idx);
+            let task = JudgeTask {
+                sid,
+                version: version4.clone(),
+                axioms: axioms.clone(),
+            };
+            if sender.send(task).is_ok() { break JudgerReceived; }
+            tracing::info!("can't send to channel #{idx}");
+            // next loop
+        }
+    } else {
+        status
+    };
+    Submission::report_status(sid, final_status, action, &mut conn).await.map_err(Into::into)
+}
+
+#[repr(transparent)]
+pub struct Subscription {
+    inner: Option<oneshot::Receiver<JudgeTask>>,
+}
+
+impl Subscription {
+    pub fn new() -> Self {
+        let (tx, rx) = oneshot::channel();
+        FOOD.lock().push(tx);
+        tracing::info!("new judger subscription created");
+        Self { inner: Some(rx) }
+    }
+}
+
+impl Stream for Subscription {
+    type Item = Result<Frame<Bytes>, oneshot::error::RecvError>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let mut inner = unsafe { self.map_unchecked_mut(|x| &mut x.inner) };
+        match inner.as_mut().as_pin_mut() {
+            Some(rx) => {
+                let task = ready!(rx.poll(cx))?;
+                let ser = serde_json::to_vec(&task).unwrap();
+                inner.set(None);
+                Poll::Ready(Some(Ok(Frame::data(ser.into()))))
+            }
+            None => return Poll::Ready(None),
+        }
+    }
 }
 
 pub async fn main() -> io::Result<!> {

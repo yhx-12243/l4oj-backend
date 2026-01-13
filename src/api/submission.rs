@@ -1,21 +1,29 @@
+#![allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
+
 use core::{fmt::Write, mem::MaybeUninit, str};
 use std::time::SystemTime;
 
-use axum::{Extension, Json, Router, routing::post};
+use axum::{
+    Extension, Json, Router,
+    body::Body,
+    response::{IntoResponse, Response},
+    routing::post,
+};
 use bytes::Bytes;
 use compact_str::CompactString;
-use http::{StatusCode, response::Parts};
+use http::{StatusCode, header, response::Parts};
 use openssl::sha::Sha256;
 use serde::Deserialize;
 use smallvec::SmallVec;
-use tokio_postgres::types::ToSql;
+use tokio_postgres::types::{Json as QJson, ToSql};
 
 use crate::{
     bad, exs,
     libs::{
         auth::Session_,
-        constants::{BYTES_EMPTY, BYTES_NULL},
+        constants::{APPLICATION_JSON_UTF_8, BYTES_EMPTY, BYTES_NULL},
         db::{DBError, get_connection},
+        judger::task::{LeanAxiom, Task},
         olean, privilege,
         request::JsonReqult,
         response::JkmxJsonResponse,
@@ -25,7 +33,9 @@ use crate::{
     },
     models::{
         problem::Problem,
-        submission::{Submission, SubmissionAoe, SubmissionMeta, SubmissionStatus},
+        submission::{
+            Submission, SubmissionAoe, SubmissionMessageAction, SubmissionMeta, SubmissionStatus,
+        },
         user::User,
     },
     service::submission_deposit,
@@ -139,6 +149,7 @@ async fn submit(
         module_name,
         const_name,
         imports,
+        version: meta.version,
         hash: answer_hash,
         checker: problem.jb,
     };
@@ -334,7 +345,7 @@ async fn rejudge_submission(
 ) -> JkmxJsonResponse {
     const SQL_PRIV: &str = "select sid, pid, submitter, submit_time, module_name, const_name, lean_toolchain, status, message, answer_size, answer_hash, answer_obj, is_public, public_at, owner, pcontent, sub, pac, submittable, jb from lean4oj.submissions natural join lean4oj.problems where sid = $1 and status::integer >= 7";
     const SQL: &str = "select sid, pid, submitter, submit_time, module_name, const_name, lean_toolchain, status, message, answer_size, answer_hash, answer_obj, is_public, public_at, owner, pcontent, sub, pac, submittable, jb from lean4oj.submissions natural join lean4oj.problems where sid = $1 and status::integer >= 7 and owner = $2";
-    const SQL_REJUDGE: &str = "update lean4oj.submissions set lean_toolchain = $1, status = 0::\"char\", answer_size = $2, answer_hash = $3, answer_obj = '' where sid = $4";
+    const SQL_REJUDGE: &str = "update lean4oj.submissions set lean_toolchain = $1, status = 0::\"char\", message = '', answer_size = $2, answer_hash = $3, answer_obj = '' where sid = $4";
     const SQL_REJUDGE_FAIL: &str = "update lean4oj.submissions set status = '\x07', message = $1 where sid = $2";
 
     let Json(SingleSubmissionRequest { submission_id }) = req?;
@@ -366,13 +377,10 @@ async fn rejudge_submission(
         let version = meta.version;
         (olean, version, imports)
     };
-    let (olean, version, imports) = match w {
-        Some(w) => w,
-        None => {
-            let stmt = conn.prepare_static(SQL_REJUDGE_FAIL.into()).await?;
-            let n = conn.execute(&stmt, &[&"Rejudge fail.", &submission_id.cast_signed()]).await?;
-            return if n == 1 { JkmxJsonResponse::Response(StatusCode::OK, BYTES_EMPTY) } else { private::err() };
-        }
+    let Some((olean, version, imports)) = w else {
+        let stmt = conn.prepare_static(SQL_REJUDGE_FAIL.into()).await?;
+        let n = conn.execute(&stmt, &[&"Rejudge fail.", &submission_id.cast_signed()]).await?;
+        return if n == 1 { JkmxJsonResponse::Response(StatusCode::OK, BYTES_EMPTY) } else { private::err() };
     };
 
     let mut sha256 = Sha256::new();
@@ -385,6 +393,7 @@ async fn rejudge_submission(
         module_name: submission.module_name,
         const_name: submission.const_name,
         imports,
+        version,
         hash: answer_hash,
         checker: problem.jb,
     };
@@ -456,6 +465,100 @@ async fn delete_submission(
     JkmxJsonResponse::Response(StatusCode::OK, BYTES_EMPTY)
 }
 
+#[derive(Deserialize)]
+struct JudgerGetTaskRequest {
+    uid: CompactString,
+    password: CompactString,
+}
+
+#[derive(Deserialize)]
+pub struct JbAxioms {
+    axioms: SmallVec<[LeanAxiom; 4]>,
+}
+
+async fn judger_get_task_inner(req: JsonReqult<JudgerGetTaskRequest>) -> JkmxJsonResponse {
+    const SQL_AUTH: &str = "select from lean4oj.users natural join lean4oj.user_groups where uid = $1 and password = $2 and (gid = 'Lean4OJ.Admin' or gid = 'Lean4OJ.Judger') limit 1";
+    const SQL_TASK: &str = "select sid, lean_toolchain, jb from lean4oj.submissions natural join lean4oj.problems where status = '\x02' order by sid limit 1";
+
+    let Json(JudgerGetTaskRequest { uid, password }) = req?;
+
+    let mut conn = get_connection().await?;
+    let stmt = conn.prepare_static(SQL_AUTH.into()).await?;
+    let n = conn.execute(&stmt, &[&&*uid, &&*password]).await?;
+    if n != 1 { return JkmxJsonResponse::Response(StatusCode::UNAUTHORIZED, BYTES_NULL); }
+
+    let stmt = conn.prepare_static(SQL_TASK.into()).await?;
+    let Some(row) = conn.query_opt(&stmt, &[]).await? else {
+        return JkmxJsonResponse::Response(
+            unsafe { StatusCode::from_u16_unchecked(254) },
+            const { Bytes::new() },
+        );
+    };
+    let sid = row.try_get::<_, i32>(0)?.cast_unsigned();
+    let version_without_four = row.try_get::<_, &str>(1)?;
+    let QJson(JbAxioms { axioms }) = row.try_get(2)?;
+    let mut version = CompactString::with_capacity(version_without_four.len() + 1);
+    version.push('4');
+    version.push_str(version_without_four);
+    #[allow(clippy::transmute_undefined_repr)]
+    let axioms = unsafe { core::mem::transmute::<SmallVec<[LeanAxiom; 4]>, SmallVec<[CompactString; 4]>>(axioms) };
+
+    Submission::report_status(sid, SubmissionStatus::JudgerReceived, SubmissionMessageAction::NoAction, &mut conn).await?;
+
+    let res = Task { sid, version, axioms };
+    JkmxJsonResponse::Response(StatusCode::OK, serde_json::to_vec(&res)?.into())
+}
+
+async fn judger_get_task(
+    req: JsonReqult<JudgerGetTaskRequest>,
+) -> Response {
+    let res = judger_get_task_inner(req).await;
+    if let JkmxJsonResponse::Response(status, _) = res
+    && status.as_u16() == 254 {
+        let st = submission_deposit::Subscription::new();
+        let body = Body::from_stream(st);
+
+        let mut res = Response::new(body);
+        res.headers_mut().insert(header::CONTENT_TYPE, APPLICATION_JSON_UTF_8);
+        res
+    } else {
+        return res.into_response();
+    }
+}
+
+#[derive(Deserialize)]
+struct JudgerReportStatusRequest {
+    uid: CompactString,
+    password: CompactString,
+    sid: u32,
+    status: SubmissionStatus,
+    message: SubmissionMessageAction,
+    answer: Option<CompactString>,
+}
+
+async fn judger_report_status(
+    req: JsonReqult<JudgerReportStatusRequest>,
+) -> JkmxJsonResponse {
+    const SQL_AUTH: &str = "select from lean4oj.users natural join lean4oj.user_groups where uid = $1 and password = $2 and (gid = 'Lean4OJ.Admin' or gid = 'Lean4OJ.Judger') limit 1";
+    const SQL_ANS: &str = "update lean4oj.submissions set answer_obj = $1 where sid = $2";
+
+    let Json(JudgerReportStatusRequest { uid, password, sid, status, message, answer }) = req?;
+
+    let mut conn = get_connection().await?;
+    let stmt = conn.prepare_static(SQL_AUTH.into()).await?;
+    let n = conn.execute(&stmt, &[&&*uid, &&*password]).await?;
+    if n != 1 { return JkmxJsonResponse::Response(StatusCode::UNAUTHORIZED, BYTES_NULL); }
+
+    Submission::report_status(sid, status, message, &mut conn).await?;
+    if let Some(answer) = answer.as_deref() {
+        let stmt = conn.prepare_static(SQL_ANS.into()).await?;
+        let n = conn.execute(&stmt, &[&answer, &sid.cast_signed()]).await?;
+        if n != 1 { return private::err(); }
+    }
+
+    JkmxJsonResponse::Response(StatusCode::OK, BYTES_NULL)
+}
+
 pub fn router(_header: &'static Parts) -> Router {
     Router::new()
         .route("/getOleanMeta", post(get_olean_meta))
@@ -465,4 +568,7 @@ pub fn router(_header: &'static Parts) -> Router {
         .route("/rejudgeSubmission", post(rejudge_submission))
         .route("/cancelSubmission", post(cancel_submission))
         .route("/deleteSubmission", post(delete_submission))
+
+        .route("/judger__get__task", post(judger_get_task))
+        .route("/judger__report__status", post(judger_report_status))
 }

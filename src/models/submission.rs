@@ -69,6 +69,7 @@ fn 𝒮(row: Row) -> DBResult<(Submission, Problem, User)> {
 }
 
 impl Submission {
+    #[allow(clippy::too_many_arguments)]
     pub async fn create(
         pid: i32, submitter: &str, submit_time: SystemTime,
         module_name: &str, const_name: &str, lean_toolchain: &str,

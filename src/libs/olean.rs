@@ -12,7 +12,7 @@ const DATA: [(&[u8], &[u8; 40]); 1] = [
     (b".26.0", b"d8204c9fd894f91bbb2cdfec5912ec8196fd8562"),
 ];
 
-const STD: [&str; 16] = [
+const STD: [&str; 17] = [
     "Aesop",
     "Archive",
     "Batteries",
@@ -29,6 +29,7 @@ const STD: [&str; 16] = [
     "Std",
     "docs",
     "references",
+    "Lean4OJ",
 ];
 
 static ACCEPTABLE_VERSIONS: OnceLock<HashMap<&[u8], &[u8; 40]>> = OnceLock::new();

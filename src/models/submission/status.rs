@@ -3,6 +3,7 @@ use core::mem;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(debug_assertions, derive(Debug))]
 pub enum Status {
     Pending,
 
