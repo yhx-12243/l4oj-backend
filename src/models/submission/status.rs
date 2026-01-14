@@ -1,9 +1,9 @@
 use core::mem;
 
 use serde::{Deserialize, Serialize};
+use tokio_postgres::types::{FromSql, Type, accepts};
 
-#[derive(Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[cfg_attr(debug_assertions, derive(Debug))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub enum Status {
     Pending,
 
@@ -31,4 +31,16 @@ impl TryFrom<u8> for Status {
             Err(())
         }
     }
+}
+
+impl FromSql<'_> for Status {
+    fn from_sql(_: &Type, raw: &[u8]) -> Result<Self, Box<dyn core::error::Error + Send + Sync + 'static>> {
+        if let Some(&x) = raw.first() && let Ok(status) = x.try_into() {
+            Ok(status)
+        } else {
+            Err("cannot decode Status".into())
+        }
+    }
+
+    accepts!(CHAR);
 }

@@ -347,6 +347,8 @@ async fn rejudge_submission(
     const SQL: &str = "select sid, pid, submitter, submit_time, module_name, const_name, lean_toolchain, status, message, answer_size, answer_hash, answer_obj, is_public, public_at, owner, pcontent, sub, pac, submittable, jb from lean4oj.submissions natural join lean4oj.problems where sid = $1 and status::integer >= 7 and owner = $2";
     const SQL_REJUDGE: &str = "update lean4oj.submissions set lean_toolchain = $1, status = 0::\"char\", message = '', answer_size = $2, answer_hash = $3, answer_obj = '' where sid = $4";
     const SQL_REJUDGE_FAIL: &str = "update lean4oj.submissions set status = '\x07', message = $1 where sid = $2";
+    const SQL_REDUCE_AC: &str = "update lean4oj.problems set pac = pac - 1 where pid = $2";
+    const SQL_REDUCE_USER_AC: &str = "update lean4oj.users set ac = ac - 1 where uid = $2";
 
     let Json(SingleSubmissionRequest { submission_id }) = req?;
 
@@ -364,6 +366,8 @@ async fn rejudge_submission(
         Some(row) => (Submission::try_from(row.clone())?, Problem::try_from(row)?),
         None => return NO_SUCH_SUBMISSION,
     };
+
+    let is_ac = submission.status == SubmissionStatus::Accepted;
 
     /******** re-fetch files ********/
     let olean_path = olean::𝑔𝑒𝑡_𝑜𝑙𝑒𝑎𝑛_𝑝𝑎𝑡ℎ(&submission.submitter, &submission.module_name);
@@ -410,6 +414,12 @@ async fn rejudge_submission(
         &version, &(olean.len() as i64), &answer_hash.as_slice(), &submission_id.cast_signed(),
     ]).await?;
     if n != 1 { return private::err(); }
+    if is_ac {
+        let stmt_reduce_ac = conn.prepare_static(SQL_REDUCE_AC.into()).await?;
+        conn.execute(&stmt_reduce_ac, &[&submission.pid]).await?;
+        let stmt_reduce_user_ac = conn.prepare_static(SQL_REDUCE_USER_AC.into()).await?;
+        conn.execute(&stmt_reduce_user_ac, &[&&*task.uid]).await?;
+    }
 
     submission_deposit::transmit(task)?;
 
@@ -420,7 +430,9 @@ async fn cancel_submission(
     Session_(session): Session_,
     req: JsonReqult<SingleSubmissionRequest>,
 ) -> JkmxJsonResponse {
-    const SQL_CANCEL: &str = "update lean4oj.submissions set status = '\x0b' where sid = $1 and status::integer >= 7";
+    const SQL_CANCEL: &str = "update lean4oj.submissions set status = '\x0b' where sid = $1 and status::integer >= 7 returning old.status, pid, submitter";
+    const SQL_REDUCE_AC: &str = "update lean4oj.problems set pac = pac - 1 where pid = $2";
+    const SQL_REDUCE_USER_AC: &str = "update lean4oj.users set ac = ac - 1 where uid = $2";
 
     let Json(SingleSubmissionRequest { submission_id }) = req?;
 
@@ -431,8 +443,16 @@ async fn cancel_submission(
         return JkmxJsonResponse::Response(StatusCode::FORBIDDEN, BYTES_EMPTY);
     }
 
-    let n = conn.execute(SQL_CANCEL, &[&submission_id.cast_signed()]).await?;
-    if n != 1 { return NO_SUCH_SUBMISSION; }
+    let row = conn.query_one(SQL_CANCEL, &[&submission_id.cast_signed()]).await?;
+    let status = row.try_get::<_, SubmissionStatus>(0)?;
+    if status == SubmissionStatus::Accepted {
+        let pid = row.try_get::<_, i32>(1)?;
+        let submitter = row.try_get::<_, &str>(2)?;
+        let stmt_reduce_ac = conn.prepare_static(SQL_REDUCE_AC.into()).await?;
+        conn.execute(&stmt_reduce_ac, &[&pid]).await?;
+        let stmt_reduce_user_ac = conn.prepare_static(SQL_REDUCE_USER_AC.into()).await?;
+        conn.execute(&stmt_reduce_user_ac, &[&submitter]).await?;
+    }
 
     JkmxJsonResponse::Response(StatusCode::OK, BYTES_EMPTY)
 }
@@ -441,8 +461,10 @@ async fn delete_submission(
     Session_(session): Session_,
     req: JsonReqult<SingleSubmissionRequest>,
 ) -> JkmxJsonResponse {
-    const SQL_DELETE: &str = "delete from lean4oj.submissions where sid = $1 returning pid";
+    const SQL_DELETE: &str = "delete from lean4oj.submissions where sid = $1 returning status, pid, submitter";
     const SQL_REDUCE: &str = "update lean4oj.problems set sub = sub - 1 where pid = $1";
+    const SQL_REDUCE_AC: &str = "update lean4oj.problems set pac = pac - 1, sub = sub - 1 where pid = $1";
+    const SQL_REDUCE_USER_AC: &str = "update lean4oj.users set ac = ac - 1 where uid = $1";
 
     let Json(SingleSubmissionRequest { submission_id }) = req?;
 
@@ -455,10 +477,20 @@ async fn delete_submission(
 
     let stmt_delete = conn.prepare_static(SQL_DELETE.into()).await?;
     let stmt_reduce = conn.prepare_static(SQL_REDUCE.into()).await?;
+    let stmt_reduce_ac = conn.prepare_static(SQL_REDUCE_AC.into()).await?;
+    let stmt_reduce_user_ac = conn.prepare_static(SQL_REDUCE_USER_AC.into()).await?;
     let txn = conn.transaction().await?;
     let row = txn.query_one(&stmt_delete, &[&submission_id.cast_signed()]).await?;
-    let pid = row.try_get::<_, i32>(0)?;
-    let n = txn.execute(&stmt_reduce, &[&pid]).await?;
+    let status = row.try_get::<_, SubmissionStatus>(0)?;
+    let pid = row.try_get::<_, i32>(1)?;
+    let n = if status == SubmissionStatus::Accepted {
+        let n = txn.execute(&stmt_reduce_ac, &[&pid]).await?;
+        if n != 1 { return private::err(); }
+        let submitter = row.try_get::<_, &str>(2)?;
+        txn.execute(&stmt_reduce_user_ac, &[&submitter]).await
+    } else {
+        txn.execute(&stmt_reduce, &[&pid]).await
+    }?;
     if n != 1 { return private::err(); }
     txn.commit().await?;
 

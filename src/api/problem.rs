@@ -26,6 +26,7 @@ use crate::{
         discussion::Discussion,
         localedict::{LocaleDict, LocaleDictEntryFlatten, LocaleDictEntryOwnedFlatten},
         problem::{Problem, ProblemInner},
+        submission::{Submission, SubmissionStatus},
         tag::{LTags, Tag},
         user::User,
     },
@@ -72,19 +73,31 @@ mod private {
         }
     }
 
-    pub(super) fn 𝝈(res: &mut String, p: &super::Problem, locale: Option<&str>, tids: &[u32], lookup: &super::HashMap<u32, Option<super::Tag>>) -> std::io::Result<()> {
+    pub(super) fn 𝝈(
+        res: &mut String,
+        p: &super::Problem,
+        locale: Option<&str>,
+        tids: &[u32],
+        lookup: &super::HashMap<u32, Option<super::Tag>>,
+        lookup_sub: &super::HashMap<i32, (u32, super::SubmissionStatus)>,
+    ) -> std::io::Result<()> {
         if let Some((locale_key, content)) = p.content.apply_with_key(locale) {
             let ltags = super::LTags {
                 tags: tids.iter().filter_map(|tid| lookup.get(tid).and_then(Option::as_ref)),
                 locale,
             };
             write!(
-                res, r#"{{"meta":{},"title":{},"tags":{},"resultLocale":{}}},"#,
+                res, r#"{{"meta":{},"title":{},"tags":{},"resultLocale":{}"#,
                 WithJson(p),
                 WithJson(&*content.title),
                 WithJson(ltags),
                 WithJson(&**locale_key),
-            ).map_err(std::io::Error::other)
+            ).map_err(std::io::Error::other)?;
+            if let Some(&(sid, status)) = lookup_sub.get(&p.pid) {
+                write!(res, r#","submission":{{"id":{sid},"status":"{status:?}"}}"#).map_err(std::io::Error::other)?;
+            }
+            res.push_str("},");
+            Ok(())
         } else {
             Err(std::io::const_error!(std::io::ErrorKind::Other, "No content for locale"))
         }
@@ -217,8 +230,15 @@ async fn query_problem_set(
             for &tid in tids { lookup.insert(tid, None); }
         }
         Tag::get_area_of_effect(&mut lookup, &mut conn).await?;
+
+        let lookup_sub = if let Some(uid) = uid {
+            Submission::by_uid_pids(uid, problems.iter().map(|p| p.0.pid), &mut conn).await?
+        } else {
+            HashMap::new()
+        };
+
         for (p, tids) in &problems {
-            private::𝝈(&mut res, p, locale.as_deref(), tids, &lookup)?;
+            private::𝝈(&mut res, p, locale.as_deref(), tids, &lookup, &lookup_sub)?;
         }
         if res.len() > 11 { res.pop(); }
         res.push(']');
@@ -322,10 +342,14 @@ struct GetProblemRequest {
     last_submission_and_last_accepted_submission: Option<bool>,
 }
 
+#[allow(clippy::too_many_lines)]
 async fn get_problem(
     Session_(session): Session_,
     req: JsonReqult<GetProblemRequest>,
 ) -> JkmxJsonResponse {
+    const SQL_LAST_SUBMISSION: &str = "select sid, status, module_name, const_name from lean4oj.submissions where pid = $1 and submitter = $2 order by sid desc limit 1";
+    const SQL_LAST_AC_SUBMISSION: &str = "select sid, status from lean4oj.submissions where pid = $1 and submitter = $2 and status = '\x09' order by sid desc limit 1";
+
     let Json(GetProblemRequest {
         id,
         display_id,
@@ -402,7 +426,35 @@ async fn get_problem(
     }
 
     if last_submission_and_last_accepted_submission == Some(true) {
-        res.push_str(r#","lastSubmission":{}"#);
+        res.push_str(r#","lastSubmission":{"#);
+        if let Some(uid) = uid {
+            let stmt = conn.prepare_static(SQL_LAST_SUBMISSION.into()).await?;
+            let row = conn.query_opt(&stmt, &[&id, &uid]).await?;
+            if let Some(row) = row {
+                let sid = row.try_get::<_, i32>(0)?.cast_unsigned();
+                let status = row.try_get::<_, SubmissionStatus>(1)?;
+                let module_name = row.try_get::<_, &str>(2)?;
+                let const_name = row.try_get::<_, &str>(3)?;
+                write!(&mut res, r#""lastSubmission":{{"id":{sid},"status":"{status:?}"}},"lastSubmissionContent":{{"moduleName":"{module_name}","constName":"{const_name}"}}"#)?;
+                let ac = if status == SubmissionStatus::Accepted {
+                    Some((sid, status))
+                } else {
+                    let stmt = conn.prepare_static(SQL_LAST_AC_SUBMISSION.into()).await?;
+                    let row = conn.query_opt(&stmt, &[&id, &uid]).await ?;
+                    if let Some(row) = row {
+                        let sid = row.try_get::<_, i32>(0)?.cast_unsigned();
+                        let status = row.try_get(1)?;
+                        Some((sid, status))
+                    } else {
+                        None
+                    }
+                };
+                if let Some((sid, status)) = ac {
+                    write!(&mut res, r#","lastAcceptedSubmission":{{"id":{sid},"status":"{status:?}"}}"#)?;
+                }
+            }
+        }
+        res.push('}');
     }
 
     res.push('}');

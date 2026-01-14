@@ -72,19 +72,17 @@ where
     Ok(buf)
 }
 
-pub async fn main_loop<S>(sock: S) -> io::Result<!>
+pub async fn main_loop<S>(sock: S) -> hyper::Result<()>
 where
     S: Read + Write + Send + Unpin + 'static,
 {
-    let (mut sender, conn) = conn::http1::handshake::<_, String>(sock)
-        .await
-        .map_err(io::Error::other)?;
-    let _conn_backend = tokio::spawn(conn.with_upgrades());
+    let (mut sender, conn) = conn::http1::handshake::<_, String>(sock).await?;
+    let conn_backend = tokio::spawn(conn.with_upgrades());
 
     let l4judger = format!("{}/l4judger", env!("OLEAN_ROOT"));
 
-    loop {
-        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+    while !conn_backend.is_finished() {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
         let task = match task::get(&mut sender).await {
             Ok(Ok(t)) => t,
@@ -167,4 +165,6 @@ where
             let _ = report(task.sid, status::Status::JudgementFailed, message::Action::Replace(Cow::Owned(err)), None, &mut sender).await;
         }
     }
+
+    conn_backend.await.unwrap()
 }

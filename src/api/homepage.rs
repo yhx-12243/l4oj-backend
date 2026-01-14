@@ -1,4 +1,4 @@
-use core::{future::ready, mem};
+use core::{fmt, future::ready, mem};
 
 use axum::{
     Router,
@@ -14,13 +14,19 @@ use tokio_postgres::Client;
 
 use crate::{
     libs::{
+        auth::Session_,
         db::{DBResult, get_connection},
         preference::server::Pagination,
         request::{RawPayload, Repult},
         response::JkmxJsonResponse,
         serde::SliceMap,
     },
-    models::{discussion::Discussion, problem::Problem, user::User},
+    models::{
+        discussion::Discussion,
+        problem::Problem,
+        submission::{Submission, SubmissionStatus},
+        user::User,
+    },
 };
 
 #[repr(transparent)]
@@ -72,9 +78,22 @@ struct HomepageRequest {
 const ANNOUNCEMENT_IDS: [u32; 5] = [1, 2, 3, 4, 12];
 
 #[derive(Serialize)]
-struct Inner {
+struct Inner1 {
+    id: u32,
+    status: SubmissionStatus,
+}
+
+#[derive(Serialize)]
+struct Inner2 {
     meta: Problem,
     title: CompactString,
+    submission: Option<Inner1>,
+}
+
+impl fmt::Debug for Inner2 {
+    fn fmt(&self, _: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Ok(())
+    }
 }
 
 const N_PROBLEMS: usize = Pagination::default().homepage_problem_list as usize;
@@ -87,10 +106,10 @@ struct HomepageResponse<'a> {
     countdown: Countdowns,
     friend_links: FriendLinks<'a>,
     top_users: Vec<User>,
-    latest_updated_problems: SmallVec<[Inner; N_PROBLEMS]>,
+    latest_updated_problems: SmallVec<[Inner2; N_PROBLEMS]>,
 }
 
-async fn get_latest_updated_problems(locale: Option<&str>, db: &mut Client) -> DBResult<SmallVec<[Inner; N_PROBLEMS]>> {
+async fn get_latest_updated_problems(locale: Option<&str>, db: &mut Client) -> DBResult<SmallVec<[Inner2; N_PROBLEMS]>> {
     const SQL: &str = "select pid, is_public, public_at, owner, pcontent, sub, pac, submittable, jb from lean4oj.problems where is_public order by public_at desc limit $1";
 
     let stmt = db.prepare_static(SQL.into()).await?;
@@ -99,14 +118,18 @@ async fn get_latest_updated_problems(locale: Option<&str>, db: &mut Client) -> D
     stream.and_then(|row| ready(try {
         let mut problem = Problem::try_from(row)?;
         let content = mem::take(&mut problem.content);
-        Inner {
+        Inner2 {
             meta: problem,
             title: content.apply_owned(locale).map_or_default(|x| x.title),
+            submission: None,
         }
     })).try_collect().await
 }
 
-async fn get_homepage(req: Repult<Query<HomepageRequest>>) -> JkmxJsonResponse {
+async fn get_homepage(
+    Session_(session): Session_,
+    req: Repult<Query<HomepageRequest>>,
+) -> JkmxJsonResponse {
     let Query(HomepageRequest { locale }) = req?;
 
     let mut conn = get_connection().await?;
@@ -119,13 +142,25 @@ async fn get_homepage(req: Repult<Query<HomepageRequest>>) -> JkmxJsonResponse {
     let mut announcements = Discussion::by_ids(ANNOUNCEMENT_IDS.into_iter(), &mut conn).await?;
     for d in &mut announcements { d.backdoor(locale.as_deref()); }
     let links = links::friend_links(locale.as_deref());
+    let mut latest_updated_problems = get_latest_updated_problems(locale.as_deref(), &mut conn).await?;
+
+    if let Some(user) = User::from_maybe_session(&session, &mut conn).await? {
+        let lookup = Submission::by_uid_pids(&user.uid, latest_updated_problems.iter().map(|p| p.meta.pid), &mut conn).await?;
+        for problem in &mut latest_updated_problems {
+            if let Some(&(id, status)) = lookup.get(&problem.meta.pid) {
+                problem.submission = Some(Inner1 { id, status });
+            }
+        }
+    }
+
+    // todo
     let res = HomepageResponse {
         announcements,
         hitokoto: const { HitokotoConfig::default() },
         countdown: const { Countdowns::default() },
         friend_links: FriendLinks { links: SliceMap::from_slice(&links) },
         top_users,
-        latest_updated_problems: get_latest_updated_problems(locale.as_deref(), &mut conn).await?,
+        latest_updated_problems,
     };
 
     JkmxJsonResponse::Response(StatusCode::OK, serde_json::to_vec(&res)?.into())

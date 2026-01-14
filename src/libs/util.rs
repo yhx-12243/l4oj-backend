@@ -44,6 +44,12 @@ pub const fn get_millis(time: SystemTime) -> u128 {
     unsafe { core::mem::transmute::<SystemTime, Duration>(time).as_millis() }
 }
 
+#[inline]
+#[allow(clippy::transmute_undefined_repr)]
+pub const fn from_millis(time: u64) -> SystemTime {
+    unsafe { core::mem::transmute::<Duration, SystemTime>(Duration::from_millis(time)) }
+}
+
 pub fn gen_random_ascii<const N: usize>() -> [Char; N] {
     use rand::RngCore;
     // const SAMPLER: UniformInt<u32> = UniformInt::new_inclusive(33, 126).unwrap();

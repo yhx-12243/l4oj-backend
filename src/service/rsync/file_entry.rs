@@ -39,7 +39,7 @@ impl FileEntry {
 }
 
 impl fmt::Debug for FileEntry {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct_field5_finish(
             "FileEntry",
             "path", &self.path.utf8_chunks().debug(),

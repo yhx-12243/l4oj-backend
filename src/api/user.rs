@@ -1,3 +1,5 @@
+use core::future::ready;
+
 use axum::{
     Json, Router,
     extract::Query,
@@ -5,11 +7,15 @@ use axum::{
 };
 use bytes::Bytes;
 use compact_str::CompactString;
+use futures_util::TryStreamExt;
 use http::{StatusCode, response::Parts};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use smallvec::SmallVec;
-use tokio_postgres::{Client, types::Json as QJson};
+use tokio_postgres::{
+    Client,
+    types::{Json as QJson, ToSql},
+};
 
 use crate::{
     bad, exs,
@@ -21,6 +27,7 @@ use crate::{
         request::{JsonReqult, RawPayload, Repult},
         response::JkmxJsonResponse,
         serde::WithJson,
+        util::from_millis,
         validate::{check_email, check_username},
     },
     models::user::{User, UserA, UserInformation},
@@ -169,24 +176,32 @@ async fn get_user_list(req: JsonReqult<GetUserListRequest>) -> JkmxJsonResponse 
     JkmxJsonResponse::Response(StatusCode::OK, res.into())
 }
 
+const SUBMISSION_COUNT_PER_DAY_COUNT: usize = 53 * 7;
+
 #[derive(Deserialize)]
-struct GetSingleUserRequest {
+struct GetUserDetailRequest {
     uid: CompactString,
+    timezone: CompactString,
+    now: u64,
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct GetUserDetailResponse {
     meta: User,
     information: UserInformation,
-    submissionCountPerDay: [!; 0],
+    submission_count_per_day: Box<[u32]>,
     rank: u64,
     hasPrivilege: bool,
 }
 
-async fn get_user_detail(req: JsonReqult<GetSingleUserRequest>) -> JkmxJsonResponse {
+#[allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
+async fn get_user_detail(req: JsonReqult<GetUserDetailRequest>) -> JkmxJsonResponse {
     const SQL_RANK: &str = "select count(*) from lean4oj.users where ac > $1";
+    const SQL_PER_DAY: &str = "select (($1::timestamp at time zone 'UTC' at time zone $2)::date - (submit_time at time zone 'UTC' at time zone $2)::date) as d, count(*) from lean4oj.submissions where submitter = $3 and submit_time between ((($1::timestamp at time zone 'UTC' at time zone $2)::date - $4::integer)::timestamp at time zone $2 at time zone 'UTC') and (($1::timestamp at time zone 'UTC' at time zone $2)::date + 1)::timestamp at time zone $2 at time zone 'UTC' group by d";
 
-    let Json(GetSingleUserRequest { uid }) = req?;
+    let Json(GetUserDetailRequest { uid, timezone, now }) = req?;
+    let now = from_millis(now);
 
     let mut conn = get_connection().await?;
     let Some(user) = User::by_uid(&uid, &mut conn).await? else { return NO_SUCH_USER };
@@ -194,15 +209,33 @@ async fn get_user_detail(req: JsonReqult<GetSingleUserRequest>) -> JkmxJsonRespo
     let row = conn.query_one(&stmt, &[&user.ac.cast_signed()]).await?;
     let information = UserInformation::of(&uid, &mut conn).await?;
 
+    let mut submission_count_per_day = unsafe { Box::new_zeroed_slice(SUBMISSION_COUNT_PER_DAY_COUNT).assume_init() };
+
+    let stmt = conn.prepare_static(SQL_PER_DAY.into()).await?;
+    let params: [&(dyn ToSql + Sync); 4] = [&now, &&*timezone, &&*uid, &(SUBMISSION_COUNT_PER_DAY_COUNT as i32 - 1)];
+    let stream = conn.query_raw(&stmt, params).await?;
+    stream.try_for_each(|row| ready(try {
+        let d = row.try_get::<_, i32>(0)?;
+        let c = row.try_get::<_, i64>(1)?;
+        if let Some(r) = submission_count_per_day.get_mut(SUBMISSION_COUNT_PER_DAY_COUNT - 1 - d as usize) {
+            *r = c as u32;
+        }
+    })).await?;
+
     let res = GetUserDetailResponse {
         meta: user,
         information,
-        submissionCountPerDay: [],
+        submission_count_per_day,
         rank: row.try_get::<_, i64>(0)?.cast_unsigned() + 1,
         hasPrivilege: true,
     };
 
     JkmxJsonResponse::Response(StatusCode::OK, serde_json::to_vec(&res)?.into())
+}
+
+#[derive(Deserialize)]
+struct GetSingleUserRequest {
+    uid: CompactString,
 }
 
 #[derive(Serialize)]

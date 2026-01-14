@@ -15,7 +15,7 @@ mod main;
 mod task;
 
 #[tokio::main]
-async fn main() -> std::io::Result<!> {
+async fn main() -> ! {
     use hyper_util::rt::TokioIo;
     use tokio::net::UnixStream;
 
@@ -23,8 +23,19 @@ async fn main() -> std::io::Result<!> {
 
     logger::init();
 
-    let stream = UnixStream::connect(SOCK).await?;
-    let io = TokioIo::new(stream);
+    loop {
+        let stream = match UnixStream::connect(SOCK).await {
+            Ok(sock)  => sock,
+            Err(e) => {
+                tracing::error!("Failed to connect to {SOCK}: {e}, reconnecting ...");
+                tokio::time::sleep(constants::RECONNECT_INTERVAL).await;
+                continue;
+            }
+        };
+        let io = TokioIo::new(stream);
 
-    main::main_loop(io).await
+        if let Err(e) = main::main_loop(io).await {
+            tracing::error!("Judger main loop exited with error: {e}");
+        }
+    }
 }

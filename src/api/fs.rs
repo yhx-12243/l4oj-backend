@@ -34,12 +34,10 @@ pub async fn submission(
         const SQL_USER: &str = "select from lean4oj.submissions natural join lean4oj.problems where sid = $1 and (owner = $2 or is_public)";
         const SQL_GUEST: &str = "select from lean4oj.submissions natural join lean4oj.problems where sid = $1 and is_public";
 
-        let maybe_user = User::from_maybe_session(&session, &mut conn).await?;
-        let uid = maybe_user.as_ref().map(|u| &*u.uid);
-        if let Some(uid) = uid {
-            if !privilege::check_any(uid, PRIVIS.into_iter(), &mut conn).await? {
+        if let Some(user) = User::from_maybe_session(&session, &mut conn).await? {
+            if !privilege::check_any(&user.uid, PRIVIS.into_iter(), &mut conn).await? {
                 let stmt = conn.prepare_static(SQL_USER.into()).await?;
-                if conn.query_opt(&stmt, &[&sid.cast_signed(), &uid]).await?.is_none() {
+                if conn.query_opt(&stmt, &[&sid.cast_signed(), &&*user.uid]).await?.is_none() {
                     return StatusCode::NOT_FOUND.into_response();
                 }
             }

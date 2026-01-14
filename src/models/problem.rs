@@ -68,6 +68,12 @@ pub struct Problem {
     pub jb: Bytes,
 }
 
+impl fmt::Debug for Problem {
+    fn fmt(&self, _: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Ok(())
+    }
+}
+
 #[repr(transparent)]
 struct Inner1<'a, T>(pub Keys<'a, CompactString, T>);
 

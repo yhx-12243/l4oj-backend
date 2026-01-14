@@ -34,6 +34,7 @@ ALTER TABLE ONLY lean4oj.discussion_replies DROP CONSTRAINT discussion_replies_d
 ALTER TABLE ONLY lean4oj.discussion_reactions DROP CONSTRAINT discussion_reactions_uid_fkey;
 DROP INDEX lean4oj.users_ac_idx;
 DROP INDEX lean4oj.user_groups_gid_uid_idx;
+DROP INDEX lean4oj.submissions_submitter_submit_time_idx;
 DROP INDEX lean4oj.submissions_submitter_sid_idx;
 DROP INDEX lean4oj.submissions_status_sid_idx;
 DROP INDEX lean4oj.submissions_pid_sid_idx;
@@ -565,6 +566,13 @@ CREATE INDEX submissions_status_sid_idx ON lean4oj.submissions USING btree (stat
 --
 
 CREATE INDEX submissions_submitter_sid_idx ON lean4oj.submissions USING btree (submitter, sid);
+
+
+--
+-- Name: submissions_submitter_submit_time_idx; Type: INDEX; Schema: lean4oj; Owner: -
+--
+
+CREATE INDEX submissions_submitter_submit_time_idx ON lean4oj.submissions USING btree (submitter, submit_time);
 
 
 --

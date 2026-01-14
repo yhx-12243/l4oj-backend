@@ -88,7 +88,7 @@ pub struct OleanMeta<'a> {
 
 #[cfg(test)]
 impl fmt::Debug for OleanMeta<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let f_sections = |fmt: &mut fmt::Formatter<'_>| {
             fmt.debug_list()
                 .entries(

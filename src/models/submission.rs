@@ -1,8 +1,9 @@
-use core::future::ready;
+use core::{fmt, future::ready};
 use std::time::SystemTime;
 
 use compact_str::CompactString;
 use futures_util::TryStreamExt;
+use hashbrown::HashMap;
 use serde::{Serialize, ser::SerializeMap};
 use smallvec::{SmallVec, smallvec};
 use tokio_postgres::{Client, Row, types::ToSql};
@@ -16,7 +17,7 @@ pub use status::Status as SubmissionStatus;
 
 use crate::{
     libs::{
-        db::{DBError, DBResult},
+        db::{DBError, DBResult, ToSqlIter},
         util::get_millis,
     },
     models::{problem::Problem, user::User},
@@ -48,10 +49,7 @@ impl TryFrom<Row> for Submission {
         let module_name = row.try_get::<_, &str>("module_name")?.into();
         let const_name = row.try_get::<_, &str>("const_name")?.into();
         let lean_toolchain = row.try_get::<_, &str>("lean_toolchain")?.into();
-        let status = row.try_get::<_, i8>("status")?;
-        let status = status.cast_unsigned().try_into().map_err(|()|
-            DBError::new(tokio_postgres::error::Kind::FromSql(7), None)
-        )?;
+        let status = row.try_get("status")?;
         let message = row.try_get::<_, &str>("message")?.into();
         let answer_size = row.try_get::<_, i64>("answer_size")?.cast_unsigned();
         let answer_hash = row.try_get::<_, &[u8]>("answer_hash")?;
@@ -88,29 +86,39 @@ impl Submission {
     }
 
     pub async fn report_status(sid: u32, status: SubmissionStatus, msg: SubmissionMessageAction, db: &mut Client) -> DBResult<()> {
-        const SQL: &str = "update lean4oj.submissions set status = $1 where sid = $2";
-        const SQL_REPLACE: &str = "update lean4oj.submissions set status = $1, message = $2 where sid = $3";
-        const SQL_APPEND: &str = "update lean4oj.submissions set status = $1, message = message || $2 where sid = $3";
+        const SQL: &str = "update lean4oj.submissions set status = $1 where sid = $2 returning old.status, pid, submitter";
+        const SQL_REPLACE: &str = "update lean4oj.submissions set status = $1, message = $2 where sid = $3 returning old.status, pid, submitter";
+        const SQL_APPEND: &str = "update lean4oj.submissions set status = $1, message = message || $2 where sid = $3 returning old.status, pid, submitter";
+        const SQL_PROBLEM_AC: &str = "update lean4oj.problems set pac = pac + $1 where pid = $2";
+        const SQL_USER_AC: &str = "update lean4oj.users set ac = ac + $1 where uid = $2";
 
-        let n = match msg {
+        let row = match msg {
             SubmissionMessageAction::NoAction => {
                 let stmt = db.prepare_static(SQL.into()).await?;
-                db.execute(&stmt, &[&(status as u8).cast_signed(), &sid.cast_signed()]).await
+                db.query_one(&stmt, &[&(status as u8).cast_signed(), &sid.cast_signed()]).await
             }
             SubmissionMessageAction::Replace(m) => {
                 let stmt = db.prepare_static(SQL_REPLACE.into()).await?;
-                db.execute(&stmt, &[&(status as u8).cast_signed(), &m, &sid.cast_signed()]).await
+                db.query_one(&stmt, &[&(status as u8).cast_signed(), &m, &sid.cast_signed()]).await
             }
             SubmissionMessageAction::Append(m) => {
                 let stmt = db.prepare_static(SQL_APPEND.into()).await?;
-                db.execute(&stmt, &[&(status as u8).cast_signed(), &m, &sid.cast_signed()]).await
+                db.query_one(&stmt, &[&(status as u8).cast_signed(), &m, &sid.cast_signed()]).await
             }
         }?;
-        if n == 1 {
-            Ok(())
-        } else {
-            Err(DBError::new(tokio_postgres::error::Kind::UnexpectedMessage, None))
+        let old = row.try_get::<_, SubmissionStatus>(0)?;
+
+        let delta = i32::from(status == SubmissionStatus::Accepted) - i32::from(old == SubmissionStatus::Accepted);
+        if delta != 0 {
+            let pid = row.try_get::<_, i32>(1)?;
+            let submitter = row.try_get::<_, &str>(2)?;
+            let stmt_problem = db.prepare_static(SQL_PROBLEM_AC.into()).await?;
+            db.execute(&stmt_problem, &[&delta, &pid]).await?;
+            let stmt_user = db.prepare_static(SQL_USER_AC.into()).await?;
+            db.execute(&stmt_user, &[&delta, &submitter]).await?;
         }
+
+        Ok(())
     }
 
     pub async fn by_sid_with_problem(sid: u32, db: &mut Client) -> DBResult<Option<(Self, Problem, User)>> {
@@ -190,6 +198,27 @@ impl Submission {
 
         let stmt = db.prepare_static(sql.into()).await?;
         db.query_opt(&stmt, &args).await.map(|row| row.is_some())
+    }
+
+    pub async fn by_uid_pids<I>(uid: &str, pids: I, db: &mut Client) -> DBResult<HashMap<i32, (u32, SubmissionStatus)>>
+    where
+        I: ExactSizeIterator<Item = i32> + Clone + fmt::Debug + Sync,
+    {
+        const SQL: &str = "select distinct on (pid, status = '\x09') sid, pid, status from lean4oj.submissions where submitter = $1 and pid = any($2) order by pid, status = '\x09', sid desc";
+
+        let mut lookup = HashMap::with_capacity(pids.len());
+
+        let stmt = db.prepare_static(SQL.into()).await?;
+        let params: [&(dyn ToSql + Sync); 2] = [&uid, &ToSqlIter(pids)];
+        let stream = db.query_raw(&stmt, params).await?;
+
+        stream.try_for_each(|row| ready(try {
+            let sid = row.try_get::<_, i32>(0)?.cast_unsigned();
+            let pid = row.try_get(1)?;
+            let status = row.try_get(2)?;
+            lookup.insert(pid, (sid, status));
+        })).await?;
+        Ok(lookup)
     }
 }
 
