@@ -49,6 +49,11 @@ where
         while l < self.capacity() {
             let (unfilled, ptr, inner) = self.__read_more_internal();
             let m = inner.read(unfilled).await?;
+            if m == 0 {
+                let b = unsafe { (..l).get_unchecked(self.buffer()) };
+                self.consume(l);
+                return Ok(b);
+            }
             *ptr += m;
             if let Some(n) = memchr::memchr2(C1, C2, self.buffer().get(l..).unwrap()) {
                 let b = unsafe { (..(l + n)).get_unchecked(self.buffer()) };

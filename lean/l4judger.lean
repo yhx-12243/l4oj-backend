@@ -75,8 +75,8 @@ inductive MessageAction
 
 def MessageAction.toBytes : MessageAction → ByteArray
   | .NoAction  => .mk #[0]
-  | .Replace s => .mk #[1] ++ kitsune s.utf8ByteSize ++ s.bytes
-  | .Append s  => .mk #[2] ++ kitsune s.utf8ByteSize ++ s.bytes
+  | .Replace s => .mk #[1] ++ kitsune s.utf8ByteSize ++ s.toByteArray
+  | .Append s  => .mk #[2] ++ kitsune s.utf8ByteSize ++ s.toByteArray
 
 def reportRaw (s : ByteArray) : IO Unit := do
   let stdout ← IO.getStdout
@@ -88,7 +88,7 @@ def report (status : JudgeStatus) (action : MessageAction) (answer : Option Stri
     .mk #[status.toByte] ++
     action.toBytes ++
     match answer with
-    | some ans => (.mk #[1] ++ kitsune ans.utf8ByteSize ++ ans.bytes)
+    | some ans => (.mk #[1] ++ kitsune ans.utf8ByteSize ++ ans.toByteArray)
     | none => (.mk #[0])
 
 def handleMessage (tot : Nat) (msg : Message) : IO Nat := do

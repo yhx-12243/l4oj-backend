@@ -408,7 +408,7 @@ async fn rejudge_submission(
     const SQL: &str = "select sid, pid, submitter, submit_time, module_name, const_name, lean_toolchain, status, message, answer_size, answer_hash, answer_obj, is_public, public_at, owner, pcontent, sub, pac, submittable, jb from lean4oj.submissions natural join lean4oj.problems where sid = $1 and status::integer >= 7 and owner = $2";
     const SQL_REJUDGE: &str = "update lean4oj.submissions set lean_toolchain = $1, status = 0::\"char\", message = '', answer_size = $2, answer_hash = $3, answer_obj = '' where sid = $4";
     const SQL_REJUDGE_FAIL: &str = "update lean4oj.submissions set status = '\x07', message = $1 where sid = $2";
-    const SQL_REDUCE_AC: &str = "update lean4oj.problems set pac = pac - 1 where pid = $2";
+    const SQL_REDUCE_AC: &str = "update lean4oj.problems set pac = pac - 1 where pid = $1";
     const SQL_USER_AC: &str = "update lean4oj.users set ac = (select count(distinct pid) from lean4oj.submissions where submitter = $1 and status = '\x09') where uid = $1";
 
     let Json(SingleSubmissionRequest { submission_id }) = req?;
@@ -492,7 +492,7 @@ async fn cancel_submission(
     req: JsonReqult<SingleSubmissionRequest>,
 ) -> JkmxJsonResponse {
     const SQL_CANCEL: &str = "update lean4oj.submissions set status = '\x0b' where sid = $1 and status::integer >= 7 returning old.status, pid, submitter";
-    const SQL_REDUCE_AC: &str = "update lean4oj.problems set pac = pac - 1 where pid = $2";
+    const SQL_REDUCE_AC: &str = "update lean4oj.problems set pac = pac - 1 where pid = $1";
     const SQL_USER_AC: &str = "update lean4oj.users set ac = (select count(distinct pid) from lean4oj.submissions where submitter = $1 and status = '\x09') where uid = $1";
 
     let Json(SingleSubmissionRequest { submission_id }) = req?;

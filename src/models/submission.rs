@@ -297,7 +297,7 @@ impl Serialize for SubmissionMeta<'_> {
         map.serialize_entry("submitTime", &get_millis(self.submission.submit_time))?;
         map.serialize_entry("moduleName", &*self.submission.module_name)?;
         map.serialize_entry("constName", &*self.submission.const_name)?;
-        // lean_toolchain
+        map.serialize_entry("leanVersion", &format_args!("4{}", self.submission.lean_toolchain))?;
         map.serialize_entry("status", &self.submission.status)?;
         map.serialize_entry("message", &*self.submission.message)?;
         map.serialize_entry("answerSize", &self.submission.answer_size)?;

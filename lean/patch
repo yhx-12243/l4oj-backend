@@ -1,17 +1,17 @@
 diff --git a/l4judger.c b/l4judger.c
-index 1af2acb..977d753 100644
+index 9c50278..ff648ce 100644
 --- a/l4judger.c
 +++ b/l4judger.c
-@@ -214,7 +214,7 @@ lean_object* lean_nat_mul(lean_object*, lean_object*);
- static lean_object* l_main___closed__24;
- lean_object* l_Nat_nextPowerOfTwo(lean_object*);
+@@ -207,7 +207,7 @@ LEAN_EXPORT lean_object* l___private_Init_Data_Array_Basic_0__Array_mapMUnsafe_m
+ static lean_object* l_Lean_Name_isStd___closed__14;
+ static lean_object* l_main___closed__7;
  LEAN_EXPORT lean_object* l_Std_DHashMap_Internal_Raw_u2080_filter___at___00reduceEnv_spec__0(lean_object*, lean_object*);
 -LEAN_EXPORT lean_object* l_Lean_Language_SnapshotTree_foldM___at___00main_spec__8___boxed(lean_object*, lean_object*, lean_object*);
 +lean_object *protect(lean_object*, lean_object*);
  lean_object* l_Lean_PersistentHashMap_mkEmptyEntriesArray(lean_object*, lean_object*);
- static lean_object* l_main___closed__22;
  LEAN_EXPORT lean_object* l_JudgeStatus_Replaying_elim___redArg(lean_object*);
-@@ -4994,7 +4994,7 @@ if (lean_is_scalar(x_5)) {
+ uint8_t lean_uint8_of_nat(lean_object*);
+@@ -5067,7 +5067,7 @@ if (lean_is_scalar(x_5)) {
  }
  lean_ctor_set(x_67, 0, x_23);
  lean_ctor_set(x_67, 1, x_66);
@@ -20,8 +20,8 @@ index 1af2acb..977d753 100644
  if (lean_obj_tag(x_68) == 0)
  {
  lean_object* x_69; uint8_t x_70; 
-@@ -5741,14 +5741,14 @@ x_4 = l_Lean_Language_SnapshotTree_foldM___at___00Lean_Language_SnapshotTree_fol
- return x_4;
+@@ -5899,14 +5899,14 @@ lean_dec_ref(x_1);
+ return x_8;
  }
  }
 -LEAN_EXPORT lean_object* l_Lean_Language_SnapshotTree_foldM___at___00main_spec__8___boxed(lean_object* x_1, lean_object* x_2, lean_object* x_3) {
@@ -40,23 +40,23 @@ index 1af2acb..977d753 100644
 +
 +
 +
- LEAN_EXPORT lean_object* l___private_Init_Data_Array_Basic_0__Array_forIn_x27Unsafe_loop___at___00main_spec__11___boxed(lean_object* x_1, lean_object* x_2, lean_object* x_3, lean_object* x_4, lean_object* x_5, lean_object* x_6, lean_object* x_7, lean_object* x_8, lean_object* x_9) {
+ LEAN_EXPORT lean_object* l___private_Init_Data_Array_Basic_0__Array_forIn_x27Unsafe_loop___at___00main_spec__11___redArg___boxed(lean_object* x_1, lean_object* x_2, lean_object* x_3, lean_object* x_4, lean_object* x_5) {
  _start:
  {
-@@ -5869,7 +5869,7 @@ return x_3;
+@@ -6002,7 +6002,7 @@ return x_3;
  }
  }
  lean_object* initialize_Init(uint8_t builtin);
--lean_object* initialize_Batteries_Tactic_OpenPrivate(uint8_t builtin);
+-lean_object* initialize_batteries_Batteries_Tactic_OpenPrivate(uint8_t builtin);
 +
  lean_object* initialize_Lean_Elab_DefView(uint8_t builtin);
  lean_object* initialize_Lean_Elab_Import(uint8_t builtin);
  lean_object* initialize_Lean_Language_Lean(uint8_t builtin);
-@@ -5882,9 +5882,9 @@ _G_initialized = true;
+@@ -6015,9 +6015,9 @@ _G_initialized = true;
  res = initialize_Init(builtin);
  if (lean_io_result_is_error(res)) return res;
  lean_dec_ref(res);
--res = initialize_Batteries_Tactic_OpenPrivate(builtin);
+-res = initialize_batteries_Batteries_Tactic_OpenPrivate(builtin);
 -if (lean_io_result_is_error(res)) return res;
 -lean_dec_ref(res);
 +

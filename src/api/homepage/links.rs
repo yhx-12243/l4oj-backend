@@ -1,4 +1,4 @@
-pub const fn friend_links(locale: Option<&str>) -> [(&'static str, &'static str); 16] {
+pub const fn friend_links(locale: Option<&str>) -> [(&'static str, &'static str); 17] {
     [
         ("OI Wiki", "https://oi.wiki"),
         ("Universal Online Judge", "https://uoj.ac"),
@@ -23,5 +23,13 @@ pub const fn friend_links(locale: Option<&str>) -> [(&'static str, &'static str)
         ),
         ("Art of Problem Solving", "https://artofproblemsolving.com/"),
         ("Lean4 Zulip Server", "https://leanprover.zulipchat.com/"),
+        (
+            match locale {
+                Some("en_US") => "Lean Online Judge by Ansar",
+                Some("ja_JP") => "Ansar の Lean オンライン評価",
+                _ => "Ansar 的 Lean Online Judge",
+            },
+            "https://leanoj.org/",
+        ),
     ]
 }

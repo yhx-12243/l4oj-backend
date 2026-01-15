@@ -996,7 +996,7 @@ index c97b261e..24ce2084 100644
                          Ok(res) => {
                              f($($ty,)* res).await.into_response()
 diff --git a/axum/src/response/sse.rs b/axum/src/response/sse.rs
-index cb289219..0872ce1f 100644
+index cb289219..9965cce0 100644
 --- a/axum/src/response/sse.rs
 +++ b/axum/src/response/sse.rs
 @@ -43,10 +43,10 @@ use std::{
@@ -1029,6 +1029,15 @@ index cb289219..0872ce1f 100644
      }
  }
  
+@@ -395,7 +395,7 @@ impl Event {
+         self
+     }
+ 
+-    fn field(&mut self, name: &str, value: impl AsRef<[u8]>) {
++    pub fn field(&mut self, name: &str, value: impl AsRef<[u8]>) {
+         let value = value.as_ref();
+         assert_eq!(
+             memchr::memchr2(b'\r', b'\n', value),
 diff --git a/axum/src/routing/mod.rs b/axum/src/routing/mod.rs
 index 60babd78..0f8a3cb6 100644
 --- a/axum/src/routing/mod.rs

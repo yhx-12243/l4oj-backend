@@ -33,8 +33,10 @@ pub struct LinuxPersist {
 impl LinuxPersist {
     pub fn new(fd: RawFd) -> Self {
         let mut buf = const { *b"/proc/self/fd/\0\0\0\0\0\0\0\0\0\0".as_ascii().unwrap() };
+        let mut buf_ = core::fmt::NumBuffer::new();
+        let fds = fd.cast_unsigned().format_into(&mut buf_);
         unsafe {
-            fd.cast_unsigned()._fmt(core::slice::from_raw_parts_mut(buf.as_mut_ptr().add(14).cast(), 10));
+            core::ptr::copy_nonoverlapping(fds.as_ptr(), buf.as_mut_ptr().add(14).cast(), fds.len());
         }
         Self { buf }
     }

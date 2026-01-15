@@ -39,6 +39,7 @@ pub async fn report(
     answer: Option<&str>,
     sender: &mut SendRequest<String>,
 ) -> io::Result<()> {
+    #[cfg(debug_assertions)]
     tracing::debug!("[submission #{sid}] status = {status:?}, message = {message:?}, answer = {answer:?}");
 
     let s = Report {
@@ -88,6 +89,7 @@ where
             Err(e) => { tracing::warn!("Failed to get task: {e}"); continue; }
         };
 
+        #[cfg(debug_assertions)]
         tracing::debug!("Received task: {task:?}");
 
         let bytes = task.sid.to_le_bytes();

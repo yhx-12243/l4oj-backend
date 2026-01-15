@@ -13,7 +13,7 @@ pub struct FileEntry {
     pub(super) size: usize,
     pub(super) sha1: [u8; 20],
     pub(super) enabled: usize,
-    pub(super) mode: u16,
+    pub(super) mode: libc::mode_t,
 }
 
 impl FileEntry {
