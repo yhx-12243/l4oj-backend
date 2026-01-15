@@ -1,16 +1,18 @@
 #![allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
 
-use core::{fmt::Write, mem::MaybeUninit, str};
+use core::{fmt::Write, future::ready, mem::MaybeUninit, str};
 use std::time::SystemTime;
 
 use axum::{
     Extension, Json, Router,
     body::Body,
-    response::{IntoResponse, Response},
-    routing::post,
+    extract::Query,
+    response::{IntoResponse, Response, Sse},
+    routing::{get, post},
 };
 use bytes::Bytes;
 use compact_str::CompactString;
+use futures_util::TryStreamExt;
 use http::{StatusCode, header, response::Parts};
 use openssl::sha::Sha256;
 use serde::Deserialize;
@@ -22,10 +24,10 @@ use crate::{
     libs::{
         auth::Session_,
         constants::{APPLICATION_JSON_UTF_8, BYTES_EMPTY, BYTES_NULL},
-        db::{DBError, get_connection},
+        db::{DBError, DBResult, ToSqlIter, get_connection},
         judger::task::{LeanAxiom, Task},
         olean, privilege,
-        request::JsonReqult,
+        request::{JsonReqult, Repult},
         response::JkmxJsonResponse,
         serde::WithJson,
         util::hex_digit,
@@ -35,12 +37,17 @@ use crate::{
         problem::Problem,
         submission::{
             Submission, SubmissionAoe, SubmissionMessageAction, SubmissionMeta, SubmissionStatus,
+            UserSubscription,
         },
         user::User,
     },
     service::submission_deposit,
 };
 
+const NO_SUCH_PROBLEM: JkmxJsonResponse = JkmxJsonResponse::Response(
+    StatusCode::OK,
+    Bytes::from_static(br#"{"error":"NO_SUCH_PROBLEM"}"#),
+);
 const NO_SUCH_SUBMISSION: JkmxJsonResponse = JkmxJsonResponse::Response(
     StatusCode::OK,
     Bytes::from_static(br#"{"error":"NO_SUCH_SUBMISSION"}"#),
@@ -335,6 +342,60 @@ async fn get_submission(
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct QuerySubmissionStatisticsRequest {
+    locale: Option<CompactString>,
+    problem_id: Option<i32>,
+    problem_display_id: Option<i32>, // effectly always the same, compat with frontend only.
+    skip_count: u64,
+    take_count: u64,
+}
+
+async fn query_submission_statistics(
+    Session_(session): Session_,
+    req: JsonReqult<QuerySubmissionStatisticsRequest>,
+) -> JkmxJsonResponse {
+    let Json(QuerySubmissionStatisticsRequest { locale, problem_id, problem_display_id, skip_count, take_count }) = req?;
+
+    let Some(pid) = problem_id.or(problem_display_id) else { bad!(BYTES_NULL) };
+    let skip = skip_count.min(i64::MAX.cast_unsigned()).cast_signed();
+    let take = take_count.min(100).cast_signed();
+
+    let mut conn = get_connection().await?;
+    let maybe_user = User::from_maybe_session(&session, &mut conn).await?;
+    let uid = maybe_user.as_ref().map(|u| &*u.uid);
+    let privi = if let Some(uid) = uid {
+        privilege::check(uid, "Lean4OJ.ManageProblem", &mut conn).await?
+    } else {
+        false
+    };
+    let Some(mut problem) = if privi {
+        Problem::by_pid(pid, &mut conn).await
+    } else {
+        Problem::by_pid_uid(pid, uid.unwrap_or_default(), &mut conn).await
+    }? else { return NO_SUCH_PROBLEM };
+
+    let stat = Submission::stat_aoe(pid, skip, take, &mut conn).await?;
+    let [c0, c1] = Submission::stat_count(pid, &mut conn).await?;
+
+    let mut res = r#"{"submissions":["#.to_owned();
+    for (submission, user) in stat {
+        let meta = SubmissionMeta {
+            submission,
+            problem,
+            submitter: user,
+            locale: locale.as_deref(),
+        };
+        serde_json::to_writer(unsafe { res.as_mut_vec() }, &meta).unwrap();
+        res.push(',');
+        problem = meta.problem;
+    }
+    if res.len() > 16 { res.pop(); }
+    write!(&mut res, r#"],"scores":[{c0},0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,{c1}],"count":{c1}}}"#)?;
+    JkmxJsonResponse::Response(StatusCode::OK, res.into())
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SingleSubmissionRequest {
     submission_id: u32,
 }
@@ -348,7 +409,7 @@ async fn rejudge_submission(
     const SQL_REJUDGE: &str = "update lean4oj.submissions set lean_toolchain = $1, status = 0::\"char\", message = '', answer_size = $2, answer_hash = $3, answer_obj = '' where sid = $4";
     const SQL_REJUDGE_FAIL: &str = "update lean4oj.submissions set status = '\x07', message = $1 where sid = $2";
     const SQL_REDUCE_AC: &str = "update lean4oj.problems set pac = pac - 1 where pid = $2";
-    const SQL_REDUCE_USER_AC: &str = "update lean4oj.users set ac = ac - 1 where uid = $2";
+    const SQL_USER_AC: &str = "update lean4oj.users set ac = (select count(distinct pid) from lean4oj.submissions where submitter = $1 and status = '\x09') where uid = $1";
 
     let Json(SingleSubmissionRequest { submission_id }) = req?;
 
@@ -417,8 +478,8 @@ async fn rejudge_submission(
     if is_ac {
         let stmt_reduce_ac = conn.prepare_static(SQL_REDUCE_AC.into()).await?;
         conn.execute(&stmt_reduce_ac, &[&submission.pid]).await?;
-        let stmt_reduce_user_ac = conn.prepare_static(SQL_REDUCE_USER_AC.into()).await?;
-        conn.execute(&stmt_reduce_user_ac, &[&&*task.uid]).await?;
+        let stmt_user_ac = conn.prepare_static(SQL_USER_AC.into()).await?;
+        conn.execute(&stmt_user_ac, &[&&*task.uid]).await?;
     }
 
     submission_deposit::transmit(task)?;
@@ -432,7 +493,7 @@ async fn cancel_submission(
 ) -> JkmxJsonResponse {
     const SQL_CANCEL: &str = "update lean4oj.submissions set status = '\x0b' where sid = $1 and status::integer >= 7 returning old.status, pid, submitter";
     const SQL_REDUCE_AC: &str = "update lean4oj.problems set pac = pac - 1 where pid = $2";
-    const SQL_REDUCE_USER_AC: &str = "update lean4oj.users set ac = ac - 1 where uid = $2";
+    const SQL_USER_AC: &str = "update lean4oj.users set ac = (select count(distinct pid) from lean4oj.submissions where submitter = $1 and status = '\x09') where uid = $1";
 
     let Json(SingleSubmissionRequest { submission_id }) = req?;
 
@@ -450,8 +511,8 @@ async fn cancel_submission(
         let submitter = row.try_get::<_, &str>(2)?;
         let stmt_reduce_ac = conn.prepare_static(SQL_REDUCE_AC.into()).await?;
         conn.execute(&stmt_reduce_ac, &[&pid]).await?;
-        let stmt_reduce_user_ac = conn.prepare_static(SQL_REDUCE_USER_AC.into()).await?;
-        conn.execute(&stmt_reduce_user_ac, &[&submitter]).await?;
+        let stmt_user_ac = conn.prepare_static(SQL_USER_AC.into()).await?;
+        conn.execute(&stmt_user_ac, &[&submitter]).await?;
     }
 
     JkmxJsonResponse::Response(StatusCode::OK, BYTES_EMPTY)
@@ -464,7 +525,7 @@ async fn delete_submission(
     const SQL_DELETE: &str = "delete from lean4oj.submissions where sid = $1 returning status, pid, submitter";
     const SQL_REDUCE: &str = "update lean4oj.problems set sub = sub - 1 where pid = $1";
     const SQL_REDUCE_AC: &str = "update lean4oj.problems set pac = pac - 1, sub = sub - 1 where pid = $1";
-    const SQL_REDUCE_USER_AC: &str = "update lean4oj.users set ac = ac - 1 where uid = $1";
+    const SQL_USER_AC: &str = "update lean4oj.users set ac = (select count(distinct pid) from lean4oj.submissions where submitter = $1 and status = '\x09') where uid = $1";
 
     let Json(SingleSubmissionRequest { submission_id }) = req?;
 
@@ -478,7 +539,7 @@ async fn delete_submission(
     let stmt_delete = conn.prepare_static(SQL_DELETE.into()).await?;
     let stmt_reduce = conn.prepare_static(SQL_REDUCE.into()).await?;
     let stmt_reduce_ac = conn.prepare_static(SQL_REDUCE_AC.into()).await?;
-    let stmt_reduce_user_ac = conn.prepare_static(SQL_REDUCE_USER_AC.into()).await?;
+    let stmt_user_ac = conn.prepare_static(SQL_USER_AC.into()).await?;
     let txn = conn.transaction().await?;
     let row = txn.query_one(&stmt_delete, &[&submission_id.cast_signed()]).await?;
     let status = row.try_get::<_, SubmissionStatus>(0)?;
@@ -487,7 +548,7 @@ async fn delete_submission(
         let n = txn.execute(&stmt_reduce_ac, &[&pid]).await?;
         if n != 1 { return private::err(); }
         let submitter = row.try_get::<_, &str>(2)?;
-        txn.execute(&stmt_reduce_user_ac, &[&submitter]).await
+        txn.execute(&stmt_user_ac, &[&submitter]).await
     } else {
         txn.execute(&stmt_reduce, &[&pid]).await
     }?;
@@ -495,6 +556,56 @@ async fn delete_submission(
     txn.commit().await?;
 
     JkmxJsonResponse::Response(StatusCode::OK, BYTES_EMPTY)
+}
+
+#[derive(Deserialize)]
+struct SubscibeSubmissionsRequest {
+    ids: Vec<u32>,
+}
+
+async fn subscribe_submissions(
+    Session_(session): Session_,
+    req: Repult<Query<SubscibeSubmissionsRequest>>,
+) -> Response {
+    const SQL_FILTER: &str = "select sid from lean4oj.submissions natural join lean4oj.problems where sid = any ($1) and (owner = $2 or is_public)";
+
+    let Query(SubscibeSubmissionsRequest { mut ids }) = match req {
+        Ok(s) => s,
+        Err(err) => return err.into_response(),
+    };
+    ids.sort_unstable();
+    ids.dedup();
+    if ids.len() > UserSubscription::MAX_SUBSCRIPTION { return StatusCode::BAD_REQUEST.into_response(); }
+
+    let Ok(mut conn) = get_connection().await else { return StatusCode::INTERNAL_SERVER_ERROR.into_response() };
+    let e: DBResult<()> = try {
+        let maybe_user = User::from_maybe_session(&session, &mut conn).await?;
+        let uid = maybe_user.as_ref().map(|u| &*u.uid);
+        let privi = if let Some(uid) = uid {
+            privilege::check(uid, "Lean4OJ.ManageProblem", &mut conn).await?
+        } else {
+            false
+        };
+        if !privi {
+            let stmt = conn.prepare_static(SQL_FILTER.into()).await?;
+            let params: [&(dyn ToSql + Sync); 2] = [
+                &ToSqlIter(ids.iter().map(|&x| x.cast_signed())),
+                &uid.unwrap_or_default(),
+            ];
+            let stream = conn.query_raw(&stmt, params).await?;
+            ids = stream
+                .and_then(|row| ready(row.try_get(0).map(i32::cast_unsigned)))
+                .try_collect()
+                .await?;
+            ids.sort_unstable();
+            ids.dedup();
+        }
+    };
+    if let Err(err) = e { return err.to_string().into_response(); }
+    if ids.is_empty() { return StatusCode::NO_CONTENT.into_response(); }
+
+    let st = UserSubscription::new(&ids);
+    Sse::new(st).into_response()
 }
 
 #[derive(Deserialize)]
@@ -572,7 +683,6 @@ async fn judger_report_status(
     req: JsonReqult<JudgerReportStatusRequest>,
 ) -> JkmxJsonResponse {
     const SQL_AUTH: &str = "select from lean4oj.users natural join lean4oj.user_groups where uid = $1 and password = $2 and (gid = 'Lean4OJ.Admin' or gid = 'Lean4OJ.Judger') limit 1";
-    const SQL_ANS: &str = "update lean4oj.submissions set answer_obj = $1 where sid = $2";
 
     let Json(JudgerReportStatusRequest { uid, password, sid, status, message, answer }) = req?;
 
@@ -582,10 +692,8 @@ async fn judger_report_status(
     if n != 1 { return JkmxJsonResponse::Response(StatusCode::UNAUTHORIZED, BYTES_NULL); }
 
     Submission::report_status(sid, status, message, &mut conn).await?;
-    if let Some(answer) = answer.as_deref() {
-        let stmt = conn.prepare_static(SQL_ANS.into()).await?;
-        let n = conn.execute(&stmt, &[&answer, &sid.cast_signed()]).await?;
-        if n != 1 { return private::err(); }
+    if let Some(answer) = answer {
+        Submission::report_answer(sid, answer, &mut conn).await?;
     }
 
     JkmxJsonResponse::Response(StatusCode::OK, BYTES_NULL)
@@ -597,9 +705,12 @@ pub fn router(_header: &'static Parts) -> Router {
         .route("/submit", post(submit))
         .route("/querySubmission", post(query_submission))
         .route("/getSubmissionDetail", post(get_submission))
+        .route("/querySubmissionStatistics", post(query_submission_statistics))
         .route("/rejudgeSubmission", post(rejudge_submission))
         .route("/cancelSubmission", post(cancel_submission))
         .route("/deleteSubmission", post(delete_submission))
+
+        .route("/subscribeSubmissions", get(subscribe_submissions))
 
         .route("/judger__get__task", post(judger_get_task))
         .route("/judger__report__status", post(judger_report_status))

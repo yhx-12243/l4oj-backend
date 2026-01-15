@@ -80,6 +80,8 @@ pub struct Misc {
     render_markdown_in_user_bio: bool,
     discussion_reaction_emojis: &'static [&'static str],
     discussion_reaction_allow_custom_emojis: bool,
+    disabled_emoji_in_math: &'static [&'static str],
+    lean_versions: &'static [&'static str],
 }
 
 impl const Default for Misc {
@@ -93,6 +95,8 @@ impl const Default for Misc {
             render_markdown_in_user_bio: true,
             discussion_reaction_emojis: &["👍", "👎", "😄", "😕", "❤", "🤔", "🤣", "🌿", "🍋", "🕊"],
             discussion_reaction_allow_custom_emojis: true,
+            disabled_emoji_in_math: &["↔", "↪"],
+            lean_versions: &["4.26.0", "4.27.0-rc1"],
         }
     }
 }

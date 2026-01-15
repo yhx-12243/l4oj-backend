@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[cfg_attr(debug_assertions, derive(Debug))]
 pub enum Action {
     #[allow(clippy::enum_variant_names)]

@@ -8,8 +8,9 @@ use std::sync::OnceLock;
 use compact_str::CompactString;
 use hashbrown::HashMap;
 
-const DATA: [(&[u8], &[u8; 40]); 1] = [
+const DATA: [(&[u8], &[u8; 40]); 2] = [
     (b".26.0", b"d8204c9fd894f91bbb2cdfec5912ec8196fd8562"),
+    (b".27.0-rc1", b"2fcce7258eeb6e324366bc25f9058293b04b7547"),
 ];
 
 const STD: [&str; 17] = [

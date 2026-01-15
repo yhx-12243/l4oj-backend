@@ -1,11 +1,20 @@
-use core::{fmt, future::ready};
-use std::time::SystemTime;
+use core::{
+    fmt,
+    future::ready,
+    pin::Pin,
+    ptr,
+    task::{Context, Poll},
+};
+use std::{sync::LazyLock, time::SystemTime};
 
+use axum::response::sse::Event;
 use compact_str::CompactString;
-use futures_util::TryStreamExt;
-use hashbrown::HashMap;
+use dashmap::{DashMap, Entry};
+use futures_util::{Stream, TryStreamExt};
+use hashbrown::{DefaultHashBuilder, HashMap};
 use serde::{Serialize, ser::SerializeMap};
 use smallvec::{SmallVec, smallvec};
+use tokio::sync::broadcast;
 use tokio_postgres::{Client, Row, types::ToSql};
 
 mod aoe;
@@ -62,6 +71,11 @@ impl TryFrom<Row> for Submission {
 }
 
 #[inline]
+fn 𝓈(row: Row) -> DBResult<(Submission, User)> {
+    Ok((row.clone().try_into()?, row.try_into()?))
+}
+
+#[inline]
 fn 𝒮(row: Row) -> DBResult<(Submission, Problem, User)> {
     Ok((row.clone().try_into()?, row.clone().try_into()?, row.try_into()?))
 }
@@ -90,18 +104,18 @@ impl Submission {
         const SQL_REPLACE: &str = "update lean4oj.submissions set status = $1, message = $2 where sid = $3 returning old.status, pid, submitter";
         const SQL_APPEND: &str = "update lean4oj.submissions set status = $1, message = message || $2 where sid = $3 returning old.status, pid, submitter";
         const SQL_PROBLEM_AC: &str = "update lean4oj.problems set pac = pac + $1 where pid = $2";
-        const SQL_USER_AC: &str = "update lean4oj.users set ac = ac + $1 where uid = $2";
+        const SQL_USER_AC: &str = "update lean4oj.users set ac = (select count(distinct pid) from lean4oj.submissions where submitter = $1 and status = '\x09') where uid = $1";
 
         let row = match msg {
             SubmissionMessageAction::NoAction => {
                 let stmt = db.prepare_static(SQL.into()).await?;
                 db.query_one(&stmt, &[&(status as u8).cast_signed(), &sid.cast_signed()]).await
             }
-            SubmissionMessageAction::Replace(m) => {
+            SubmissionMessageAction::Replace(ref m) => {
                 let stmt = db.prepare_static(SQL_REPLACE.into()).await?;
                 db.query_one(&stmt, &[&(status as u8).cast_signed(), &m, &sid.cast_signed()]).await
             }
-            SubmissionMessageAction::Append(m) => {
+            SubmissionMessageAction::Append(ref m) => {
                 let stmt = db.prepare_static(SQL_APPEND.into()).await?;
                 db.query_one(&stmt, &[&(status as u8).cast_signed(), &m, &sid.cast_signed()]).await
             }
@@ -112,10 +126,30 @@ impl Submission {
         if delta != 0 {
             let pid = row.try_get::<_, i32>(1)?;
             let submitter = row.try_get::<_, &str>(2)?;
-            let stmt_problem = db.prepare_static(SQL_PROBLEM_AC.into()).await?;
-            db.execute(&stmt_problem, &[&delta, &pid]).await?;
-            let stmt_user = db.prepare_static(SQL_USER_AC.into()).await?;
-            db.execute(&stmt_user, &[&delta, &submitter]).await?;
+            let stmt_problem_ac = db.prepare_static(SQL_PROBLEM_AC.into()).await?;
+            db.execute(&stmt_problem_ac, &[&delta, &pid]).await?;
+            let stmt_user_ac = db.prepare_static(SQL_USER_AC.into()).await?;
+            db.execute(&stmt_user_ac, &[&submitter]).await?;
+        }
+
+        if let Some(tx) = FOOD.get(&sid) {
+            let _ = tx.send(UserUpdate::Status(status, msg));
+        }
+
+        Ok(())
+    }
+
+    pub async fn report_answer(sid: u32, answer: CompactString, db: &mut Client) -> DBResult<()> {
+        const SQL: &str = "update lean4oj.submissions set answer_obj = $1 where sid = $2";
+
+        let stmt = db.prepare_static(SQL.into()).await?;
+        let n = db.execute(&stmt, &[&&*answer, &sid.cast_signed()]).await?;
+        if n != 1 {
+            return Err(DBError::new(tokio_postgres::error::Kind::RowCount, Some("answer update error".into())));
+        }
+
+        if let Some(tx) = FOOD.get(&sid) {
+            let _ = tx.send(UserUpdate::Answer(answer));
         }
 
         Ok(())
@@ -173,6 +207,29 @@ impl Submission {
         let stmt = db.prepare_static(sql.into()).await?;
         let stream = db.query_raw(&stmt, args).await?;
         stream.and_then(|row| ready(𝒮(row))).try_collect().await
+    }
+
+    pub async fn stat_aoe(pid: i32, skip: i64, take: i64, db: &mut Client) -> DBResult<Vec<(Self, User)>> {
+        const SQL: &str = "select sid, pid, submitter, submit_time, module_name, const_name, lean_toolchain, status, message, answer_size, answer_hash, answer_obj, uid, password, username, email, register_time, ac, nickname, bio, avatar_info from lean4oj.submissions inner join lean4oj.users on submitter = uid where pid = $1 and status = '\x09' order by sid offset $2 limit $3";
+
+        let stmt = db.prepare_static(SQL.into()).await?;
+        let params: [&(dyn ToSql + Sync); 3] = [&pid, &skip, &take];
+        let stream = db.query_raw(&stmt, params).await?;
+        stream.and_then(|row| ready(𝓈(row))).try_collect().await
+    }
+
+    pub async fn stat_count(pid: i32, db: &mut Client) -> DBResult<[u64; 2]> {
+        const SQL: &str = "select status = '\x09', count(*) from lean4oj.submissions where pid = $1 group by status = '\x09'";
+
+        let stmt = db.prepare_static(SQL.into()).await?;
+        let stream = db.query_raw(&stmt, [pid]).await?;
+        let mut ret = [0; 2];
+        stream.try_for_each(|row| ready(try {
+            let ac: bool = row.try_get(0)?;
+            let count: i64 = row.try_get(1)?;
+            ret[usize::from(ac)] = count.cast_unsigned();
+        })).await?;
+        Ok(ret)
     }
 
     pub async fn ping_one<'a, F>(aoe: aoe::Aoe, extend: F, db: &mut Client) -> DBResult<bool>
@@ -251,5 +308,99 @@ impl Serialize for SubmissionMeta<'_> {
         map.serialize_entry("problemTitle", title)?;
         map.serialize_entry("submitter", &self.submitter)?;
         map.end()
+    }
+}
+
+
+#[derive(Clone, Serialize)]
+enum UserUpdate {
+    Status(SubmissionStatus, SubmissionMessageAction),
+    Answer(CompactString),
+}
+
+static FOOD: LazyLock<
+    DashMap<u32, broadcast::Sender<UserUpdate>, DefaultHashBuilder>
+> = LazyLock::new(|| DashMap::with_hasher(DefaultHashBuilder::default()));
+
+#[repr(transparent)]
+pub struct UserSubscription {
+    #[allow(clippy::type_complexity)]
+    inner: SmallVec<[
+        (u32, broadcast::Receiver<UserUpdate>, Option<broadcast::Recv<'static, UserUpdate>>);
+        Self::MAX_SUBSCRIPTION
+    ]>,
+}
+
+impl UserSubscription {
+    pub const MAX_SUBSCRIPTION: usize = 10;
+
+    async fn wait(sid: u32, tx: broadcast::Sender<UserUpdate>) {
+        let addr = unsafe { *(&raw const tx).cast::<usize>() };
+        tx.closed().await;
+        FOOD.remove_if(&sid, |_, tx1| {
+            let ret = unsafe { *ptr::from_ref(tx1).cast::<usize>() } == addr;
+            #[cfg(debug_assertions)]
+            if ret {
+                tracing::info!("UserSubscription for sid #{sid} removed.");
+            }
+            ret
+        });
+    }
+
+    fn make_one(sid: u32) -> broadcast::Receiver<UserUpdate> {
+        match FOOD.entry(sid) {
+            Entry::Occupied(e) => e.get().subscribe(),
+            Entry::Vacant(e) => {
+                let (tx, rx) = broadcast::channel(16);
+                e.insert(tx.clone());
+                tokio::spawn(Self::wait(sid, tx));
+                rx
+            }
+        }
+    }
+
+    pub fn new(ids: &[u32]) -> Self {
+        debug_assert!(ids.len() <= Self::MAX_SUBSCRIPTION);
+        Self {
+            inner: ids.iter()
+                .map(|&sid| (sid, Self::make_one(sid), None))
+                .collect(),
+        }
+    }
+}
+
+impl Stream for UserSubscription {
+    type Item = Result<Event, broadcast::error::RecvError>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let mut buf = fmt::NumBuffer::new();
+        let inner = &mut *unsafe { self.get_unchecked_mut() }.inner;
+        for &mut (sid, ref mut rx, ref mut waiter) in inner {
+            let recv = waiter.get_or_insert_with(|| broadcast::Recv::new(unsafe { &mut *ptr::from_mut(rx) }));
+            match rx.recv_ref(Some((recv.inner(), cx.waker()))) {
+                Ok(value) => {
+                    *waiter = None;
+                    let Some(update) = value.value() else { return Poll::Ready(Some(Err(broadcast::error::RecvError::Closed))) };
+
+                    let event = Event::default()
+                        .id(sid.format_into(&mut buf))
+                        .event("update")
+                        .json_data(update)
+                        .unwrap();
+                    return Poll::Ready(Some(Ok(event)));
+                }
+                Err(broadcast::error::TryRecvError::Empty) => (),
+                Err(broadcast::error::TryRecvError::Closed) => {
+                    *waiter = None;
+                    return Poll::Ready(Some(Err(broadcast::error::RecvError::Closed)));
+                }
+                Err(broadcast::error::TryRecvError::Lagged(n)) => {
+                    *waiter = None;
+                    return Poll::Ready(Some(Err(broadcast::error::RecvError::Lagged(n))));
+                }
+            }
+        }
+
+        Poll::Pending
     }
 }

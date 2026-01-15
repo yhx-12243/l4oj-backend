@@ -79,8 +79,6 @@ where
     let (mut sender, conn) = conn::http1::handshake::<_, String>(sock).await?;
     let conn_backend = tokio::spawn(conn.with_upgrades());
 
-    let l4judger = format!("{}/l4judger", env!("OLEAN_ROOT"));
-
     while !conn_backend.is_finished() {
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
@@ -105,7 +103,7 @@ where
             env!("OLEAN_ROOT"), bytes[3], bytes[2], bytes[1], bytes[0],
         );
 
-        let mut cmd = Command::new(&*l4judger);
+        let mut cmd = Command::new("l4judger");
         cmd.env("LEAN_PATH", lean_path);
         cmd.arg(arg);
         cmd.args(task.axioms);

@@ -26,6 +26,17 @@ index c89fe43..ce77d13 100644
  }
  
  impl<R: AsyncRead> AsyncRead for BufReader<R> {
+diff --git a/src/loom/std/unsafe_cell.rs b/src/loom/std/unsafe_cell.rs
+index 3d6513b..433ee17 100644
+--- a/src/loom/std/unsafe_cell.rs
++++ b/src/loom/std/unsafe_cell.rs
+@@ -1,5 +1,5 @@
+ #[derive(Debug)]
+-pub(crate) struct UnsafeCell<T>(std::cell::UnsafeCell<T>);
++pub struct UnsafeCell<T>(std::cell::UnsafeCell<T>);
+ 
+ impl<T> UnsafeCell<T> {
+     pub(crate) const fn new(data: T) -> UnsafeCell<T> {
 diff --git a/src/net/unix/split_owned.rs b/src/net/unix/split_owned.rs
 index d1c6f93..9dd406e 100644
 --- a/src/net/unix/split_owned.rs
@@ -147,6 +158,74 @@ index 8662af3..471a6b5 100644
  }
  
  impl Drop for Acquire<'_> {
+diff --git a/src/sync/broadcast.rs b/src/sync/broadcast.rs
+index 3ab9a2c..5a355ac 100644
+--- a/src/sync/broadcast.rs
++++ b/src/sync/broadcast.rs
+@@ -394,7 +394,7 @@ struct Slot<T> {
+ }
+ 
+ /// An entry in the wait queue.
+-struct Waiter {
++pub struct Waiter {
+     /// True if queued.
+     queued: AtomicBool,
+ 
+@@ -427,12 +427,12 @@ generate_addr_of_methods! {
+     }
+ }
+ 
+-struct RecvGuard<'a, T> {
++pub struct RecvGuard<'a, T> {
+     slot: MutexGuard<'a, Slot<T>>,
+ }
+ 
+ /// Receive a value future.
+-struct Recv<'a, T> {
++pub struct Recv<'a, T> {
+     /// Receiver being waited on.
+     receiver: &'a mut Receiver<T>,
+ 
+@@ -1220,7 +1220,7 @@ impl<T> Receiver<T> {
+     }
+ 
+     /// Locks the next value if there is one.
+-    fn recv_ref(
++    pub fn recv_ref(
+         &mut self,
+         waiter: Option<(&UnsafeCell<Waiter>, &Waker)>,
+     ) -> Result<RecvGuard<'_, T>, TryRecvError> {
+@@ -1575,7 +1575,7 @@ impl<T> Drop for Receiver<T> {
+ }
+ 
+ impl<'a, T> Recv<'a, T> {
+-    fn new(receiver: &'a mut Receiver<T>) -> Recv<'a, T> {
++    pub fn new(receiver: &'a mut Receiver<T>) -> Recv<'a, T> {
+         Recv {
+             receiver,
+             waiter: WaiterCell(UnsafeCell::new(Waiter {
+@@ -1598,6 +1598,10 @@ impl<'a, T> Recv<'a, T> {
+             (me.receiver, &me.waiter.0)
+         }
+     }
++
++    pub fn inner(&self) -> &UnsafeCell<Waiter> {
++        &self.waiter.0
++    }
+ }
+ 
+ impl<'a, T> Future for Recv<'a, T>
+@@ -1701,6 +1705,10 @@ impl<T> fmt::Debug for Receiver<T> {
+ }
+ 
+ impl<'a, T> RecvGuard<'a, T> {
++    pub fn value(&self) -> Option<&T> {
++        self.slot.val.as_ref()
++    }
++
+     fn clone_value(&self) -> Option<T>
+     where
+         T: Clone,
 diff --git a/src/sync/semaphore.rs b/src/sync/semaphore.rs
 index 8af5b54..1b7fa21 100644
 --- a/src/sync/semaphore.rs
