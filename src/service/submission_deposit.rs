@@ -84,10 +84,6 @@ fn cache_path(hash: &[u8; 32]) -> String {
     s
 }
 
-unsafe extern "C" {
-    fn setxattr(path: *const u8, name: *const u8, value: *const u8, size: usize, flags: i32) -> i32;
-}
-
 fn submission_path(sid: u32) -> io::Result<String> {
     const ACL_EA_ACCESS: &CStr = c"system.posix_acl_access";
 
@@ -108,7 +104,7 @@ fn submission_path(sid: u32) -> io::Result<String> {
     unsafe {
         let mut acl = *b"\x02\0\0\0\x01\0\x07\0\xff\xff\xff\xff\x02\0\x05\0\0\0\0\0\x04\0\x07\0\xff\xff\xff\xff\x10\0\x07\0\xff\xff\xff\xff \0\0\0\xff\xff\xff\xff";
         acl.as_mut_ptr().add(16).cast::<u32>().write(0x10000 + sid);
-        if setxattr(s.as_ptr().cast(), ACL_EA_ACCESS.as_ptr().cast(), acl.as_ptr(), 44, 0) != 0 {
+        if libc::setxattr(s.as_ptr().cast(), ACL_EA_ACCESS.as_ptr(), acl.as_ptr().cast(), 44, 0) != 0 {
             return Err(io::Error::last_os_error());
         }
     }
