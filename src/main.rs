@@ -81,6 +81,7 @@
     // ptr_metadata,
     result_option_map_or_default,
     rustc_attrs,
+    // setgroups,
     // simd_wasm64,
     slice_ptr_get,
     slice_range,

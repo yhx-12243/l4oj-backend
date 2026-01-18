@@ -94,26 +94,29 @@ where
 
         let bytes = task.sid.to_le_bytes();
         let lean_path = format!(
-            "{0}/leanprover--lean4---v{2}/lib/lean:{1}/std/{2}:{1}/lean/Lean4OJ:{1}/submissions/{6:02x}/{5:02x}/{4:02x}/{3:02x}",
+            "{0}/leanprover--lean4---v{2}/lib/lean:{1}/std/{2}:{1}/lean/Lean4OJ:{1}/submissions/{6:02x}/{5:02x}/{4:02x}/{3:02x}/main.lean",
             env!("LEAN4_TOOLCHAIN_DIR"),
             env!("OLEAN_ROOT"),
             task.version,
             bytes[0], bytes[1], bytes[2], bytes[3],
         );
-        let arg = format!(
-            "{}/submissions/{:02x}/{:02x}/{:02x}/{:02x}/main.lean",
-            env!("OLEAN_ROOT"), bytes[3], bytes[2], bytes[1], bytes[0],
-        );
+        let arg = unsafe { lean_path.get_unchecked(lean_path.len() - const { env!("OLEAN_ROOT").len() + 34 }..) };
 
         let mut cmd = Command::new("l4judger");
-        cmd.env("LEAN_PATH", lean_path);
+        cmd.env("LEAN_PATH", unsafe { lean_path.get_unchecked(..lean_path.len() - 10) });
         cmd.arg(arg);
         cmd.args(task.axioms);
         cmd.stdin(Stdio::null());
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::null());
         #[cfg(target_os = "linux")]
-        cmd.uid(0xdeadbeef);
+        {
+            use std::os::unix::process::CommandExt;
+
+            cmd.uid(0x10000 + task.sid);
+            cmd.gid(0xdeadbeef);
+            cmd.as_std_mut().groups(&[]);
+        }
         let mut child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => {

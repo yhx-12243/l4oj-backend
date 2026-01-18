@@ -1,4 +1,5 @@
 use core::{
+    ffi::CStr,
     fmt::Write,
     pin::Pin,
     task::{Context, Poll, ready},
@@ -83,19 +84,35 @@ fn cache_path(hash: &[u8; 32]) -> String {
     s
 }
 
+unsafe extern "C" {
+    fn setxattr(path: *const u8, name: *const u8, value: *const u8, size: usize, flags: i32) -> i32;
+}
+
 fn submission_path(sid: u32) -> io::Result<String> {
-    let mut s = String::with_capacity(env!("OLEAN_ROOT").len() + 25);
+    const ACL_EA_ACCESS: &CStr = c"system.posix_acl_access";
+
+    let mut s = String::with_capacity(env!("OLEAN_ROOT").len() + 26);
     s.push_str(env!("OLEAN_ROOT"));
     s.push_str("/submissions/");
     let bytes = sid.to_le_bytes();
-    let _ = write!(&mut s, "{:02x}/{:02x}/{:02x}/{:02x}/", bytes[3], bytes[2], bytes[1], bytes[0]);
+    let _ = write!(&mut s, "{:02x}/{:02x}/{:02x}/{:02x}/\0", bytes[3], bytes[2], bytes[1], bytes[0]);
+    s.pop();
 
     let mut db = fs::DirBuilder::new();
     db.recursive(true);
     db.create(unsafe { s.get_unchecked(..s.len() - 3) })?;
     db.recursive(false);
     db.mode(0o770);
-    db.create(&*s).map(|()| s)
+    db.create(&*s)?;
+    #[cfg(target_os = "linux")]
+    unsafe {
+        let mut acl = *b"\x02\0\0\0\x01\0\x07\0\xff\xff\xff\xff\x02\0\x05\0\0\0\0\0\x04\0\x07\0\xff\xff\xff\xff\x10\0\x07\0\xff\xff\xff\xff \0\0\0\xff\xff\xff\xff";
+        acl.as_mut_ptr().add(16).cast::<u32>().write(0x10000 + sid);
+        if setxattr(s.as_ptr().cast(), ACL_EA_ACCESS.as_ptr().cast(), acl.as_ptr(), 44, 0) != 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    Ok(s)
 }
 
 fn deposit_main_lean(
