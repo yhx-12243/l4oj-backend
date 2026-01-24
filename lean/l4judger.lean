@@ -1,4 +1,5 @@
 import Batteries.Tactic.OpenPrivate
+import Lean.Compiler.ImplementedByAttr
 import Lean.Elab.DefView
 import Lean.Elab.Import
 import Lean.Language.Lean
@@ -172,6 +173,10 @@ def main (args : List String) : IO Unit := do
           | none => false
         if !clean then
           consts := consts.insert name ci
+  for (name, _) in consts do
+    if let some name' := Lean.Compiler.getImplementedBy? cmdState.env name then
+      report .WrongAnswer (.Append s!"Use of implemented-by {name} => {name'} is disallowed.") none
+      return
 
   let replayMonad := (reduceEnv cmdState.env <| Std.HashSet.ofList consts.keys).replay consts
   try

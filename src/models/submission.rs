@@ -63,7 +63,7 @@ impl TryFrom<Row> for Submission {
         let answer_size = row.try_get::<_, i64>("answer_size")?.cast_unsigned();
         let answer_hash = row.try_get::<_, &[u8]>("answer_hash")?;
         let answer_hash = answer_hash.try_into().map_err(|e|
-            DBError::new(tokio_postgres::error::Kind::FromSql(9), Some(Box::new(e)))
+            DBError::new(tokio_postgres::error::Kind::FromSql(10), Some(Box::new(e)))
         )?;
         let answer_obj = row.try_get::<_, &str>("answer_obj")?.into();
         Ok(Self { sid, pid, submitter, submit_time, module_name, const_name, lean_toolchain, status, message, answer_size, answer_hash, answer_obj })

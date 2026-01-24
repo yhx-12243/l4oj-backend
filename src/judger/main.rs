@@ -2,6 +2,7 @@ use core::slice;
 use std::{borrow::Cow, io, process::Stdio};
 
 use http::{Request, header};
+use http_body_util::BodyExt;
 use hyper::{
     client::conn::{self, http1::SendRequest},
     rt::{Read, Write},
@@ -56,9 +57,12 @@ pub async fn report(
         .body(serde_json::to_string(&s)?)
         .unwrap();
 
-    match sender.try_send_request(req).await {
+    let res = sender.try_send_request(req).await
+        .map_err(|e| io::Error::other(e.into_error()))?;
+
+    match res.into_body().collect().await {
         Ok(_) => Ok(()),
-        Err(e) => Err(io::Error::other(e.into_error())),
+        Err(e) => Err(io::Error::other(e)),
     }
 }
 
@@ -94,7 +98,7 @@ where
 
         let bytes = task.sid.to_le_bytes();
         let lean_path = format!(
-            "{0}/leanprover--lean4---v{2}/lib/lean:{1}/std/{2}:{1}/lean/Lean4OJ:{1}/submissions/{6:02x}/{5:02x}/{4:02x}/{3:02x}/main.lean",
+            "{0}/leanprover--lean4---v{2}/lib/lean:{1}/std/{2}:{1}/lean/Lean4OJ/{2}:{1}/submissions/{6:02x}/{5:02x}/{4:02x}/{3:02x}/main.lean",
             env!("LEAN4_TOOLCHAIN_DIR"),
             env!("OLEAN_ROOT"),
             task.version,

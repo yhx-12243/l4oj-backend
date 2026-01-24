@@ -139,7 +139,7 @@ async fn create_reply(
     let aoe = DiscussionReplyAOE {
         reply: &reply,
         publisher: Some(&user_aoe),
-        reactions: Some(&DiscussionReactionAOE::default()),
+        reactions: &DiscussionReactionAOE::default(),
         permissions: REPLY_PERMISSION_DEFAULT,
     };
     let res = format!(r#"{{"reply":{}}}"#, WithJson(aoe));
@@ -416,11 +416,12 @@ impl Serialize for Inner5<'_> {
         S: Serializer
     {
         let mut seq = serializer.serialize_seq(Some(self.replies.len()))?;
+        let default = DiscussionReactionAOE::default();
         for reply in self.replies {
             seq.serialize_element(&DiscussionReplyAOE {
                 reply,
                 publisher: self.lookup.get(&reply.publisher),
-                reactions: self.lookup2.get(&(!reply.id).cast_signed()),
+                reactions: if let Some(r) = self.lookup2.get(&(!reply.id).cast_signed()) { r } else { &default },
                 permissions: REPLY_PERMISSION_DEFAULT,
             })?;
         }

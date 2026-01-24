@@ -1,5 +1,5 @@
 diff --git a/axum-core/Cargo.toml b/axum-core/Cargo.toml
-index 1ae67eee..0507d1f2 100644
+index f9f56a53..d0fac767 100644
 --- a/axum-core/Cargo.toml
 +++ b/axum-core/Cargo.toml
 @@ -42,7 +42,6 @@ http-body = "1.0.0"
@@ -254,10 +254,10 @@ index abbe181a..90ca82e1 100644
  
                      Ok(($($ty,)* $last,))
 diff --git a/axum-core/src/response/into_response.rs b/axum-core/src/response/into_response.rs
-index 915b55ef..b004f5c8 100644
+index a311851c..80af7742 100644
 --- a/axum-core/src/response/into_response.rs
 +++ b/axum-core/src/response/into_response.rs
-@@ -368,7 +368,7 @@ where
+@@ -370,7 +370,7 @@ where
  {
      fn into_response(self) -> Response {
          let (parts, res) = self;
@@ -267,7 +267,7 @@ index 915b55ef..b004f5c8 100644
  }
  
 diff --git a/axum-core/src/response/into_response_parts.rs b/axum-core/src/response/into_response_parts.rs
-index 95564823..93ec4428 100644
+index a142b50b..d0da718c 100644
 --- a/axum-core/src/response/into_response_parts.rs
 +++ b/axum-core/src/response/into_response_parts.rs
 @@ -1,7 +1,7 @@
@@ -298,7 +298,7 @@ index 95564823..93ec4428 100644
      /// Gets a reference to the response headers.
      #[must_use]
      pub fn headers(&self) -> &HeaderMap {
-@@ -263,6 +275,15 @@ impl IntoResponseParts for Extensions {
+@@ -265,6 +277,15 @@ impl IntoResponseParts for Extensions {
      }
  }
  
@@ -762,16 +762,16 @@ index 36c06b8d..ea3183db 100644
          }
      };
 diff --git a/axum/src/json.rs b/axum/src/json.rs
-index 5eec9c2e..dc976e0a 100644
+index cee6b46f..77b70d4b 100644
 --- a/axum/src/json.rs
 +++ b/axum/src/json.rs
 @@ -1,12 +1,13 @@
  use crate::extract::Request;
  use crate::extract::{rejection::*, FromRequest};
  use axum_core::extract::OptionalFromRequest;
--use axum_core::response::{IntoResponse, Response};
+-use axum_core::response::{IntoResponse, IntoResponseFailed, Response};
 -use bytes::{BufMut, Bytes, BytesMut};
-+use axum_core::{response::{IntoResponse, Response}, RequestExt};
++use axum_core::{response::{IntoResponse, IntoResponseFailed, Response}, RequestExt};
 +use bytes::{Buf, BufMut, Bytes, BytesMut};
  use http::{
      header::{self, HeaderMap, HeaderValue},

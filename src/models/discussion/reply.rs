@@ -80,7 +80,7 @@ pub struct ReplyAOE<'a> {
     #[serde(flatten)]
     pub reply: &'a Reply,
     pub publisher: Option<&'a UserAOE>,
-    pub reactions: Option<&'a DiscussionReactionAOE>,
+    pub reactions: &'a DiscussionReactionAOE,
     pub permissions: [&'static str; 3],
 }
 
