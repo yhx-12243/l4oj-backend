@@ -24,11 +24,11 @@ pub mod db {
     pub const CONNECTION_TIMEOUT: core::time::Duration = core::time::Duration::from_secs(5);
 }
 
-pub const GLOBAL_INTERVAL: Duration = Duration::from_secs(
+pub const GLOBAL_INTERVAL: Duration = Duration::from_mins(
     #[cfg(debug_assertions)]
-    60,
+    1,
     #[cfg(not(debug_assertions))]
-    600,
+    10,
 );
 
 pub const SESSION_EXPIRE: Duration = Duration::from_hours(1);

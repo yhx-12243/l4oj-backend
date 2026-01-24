@@ -1,4 +1,5 @@
 import Batteries.Tactic.OpenPrivate
+import CollectLiterals
 import Lean.Compiler.ImplementedByAttr
 import Lean.Elab.DefView
 import Lean.Elab.Import
@@ -147,6 +148,11 @@ def main (args : List String) : IO Unit := do
 
   let some answer := extractAnswer (cmdState.env.find? `Lean4OJ.answer_str) |
     report .WrongAnswer (.Append "Failed to extract answer") none
+    return
+
+  let (malform, state) := CollectLiterals.collect `Lean4OJ.answer cmdState.env {}
+  if malform then
+    report .WrongAnswer (.Append "Malformed module") none
     return
 
   report .AxiomChecking .NoAction (some answer)

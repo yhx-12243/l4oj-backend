@@ -1,4 +1,5 @@
 #include <exception>
+#include <gmp.h>
 #include <lean/lean.h>
 using std::exception, std::exception_ptr;
 
@@ -39,4 +40,19 @@ extern "C" lean_object *protect(lean_object *arg1, lean_object *arg2) {
     lean_object *err = lean_mk_io_user_error(s);
     return lean_io_result_mk_error(err);
   }
+}
+
+#include <stdio.h>
+extern "C" uint8_t isMalform_literal(lean_object *lit) {
+  switch (lit->m_tag) {
+  case 0: {
+    lean_object *nat = lean_ctor_get(lit, 0);
+    if (!lean_is_scalar(nat) && lean_is_mpz(nat)) {
+      mpz_ptr r = (mpz_ptr)(nat + 1);
+      return r->_mp_size < 0;
+    }
+    break;
+  }
+  }
+  return 0;
 }

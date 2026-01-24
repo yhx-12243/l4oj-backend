@@ -309,7 +309,7 @@ dependencies = [
 [[package]]
 name = "env_filter"
 version = "0.1.4"
-source = "git+https://github.com/rust-cli/env_logger#02389fad5ce2aa3001173b7c650cfb1fe85c8a04"
+source = "git+https://github.com/rust-cli/env_logger#7a1b75a61bb5af9d23895c8916b6c06332a2c2f1"
 dependencies = [
  "log",
 ]
@@ -317,7 +317,7 @@ dependencies = [
 [[package]]
 name = "env_logger"
 version = "0.11.8"
-source = "git+https://github.com/rust-cli/env_logger#02389fad5ce2aa3001173b7c650cfb1fe85c8a04"
+source = "git+https://github.com/rust-cli/env_logger#7a1b75a61bb5af9d23895c8916b6c06332a2c2f1"
 dependencies = [
  "anstream",
  "anstyle",
@@ -900,7 +900,7 @@ checksum = "f89776e4d69bb58bc6993e99ffa1d11f228b839984854c7daeb5d37f87cbe950"
 [[package]]
 name = "postgres-protocol"
 version = "0.6.10"
-source = "git+https://github.com/rust-postgres/rust-postgres#b7f2cf0891c1a30b37f7df3ae3f1960affc036f3"
+source = "git+https://github.com/rust-postgres/rust-postgres#c6e435e03d936b5dcf551fc61e40f10b10fd1de2"
 dependencies = [
  "base64",
  "byteorder",
@@ -916,7 +916,7 @@ dependencies = [
 [[package]]
 name = "postgres-types"
 version = "0.2.12"
-source = "git+https://github.com/rust-postgres/rust-postgres#b7f2cf0891c1a30b37f7df3ae3f1960affc036f3"
+source = "git+https://github.com/rust-postgres/rust-postgres#c6e435e03d936b5dcf551fc61e40f10b10fd1de2"
 dependencies = [
  "bytes",
  "fallible-iterator",
@@ -1269,7 +1269,7 @@ dependencies = [
 [[package]]
 name = "tokio-postgres"
 version = "0.7.16"
-source = "git+https://github.com/rust-postgres/rust-postgres#b7f2cf0891c1a30b37f7df3ae3f1960affc036f3"
+source = "git+https://github.com/rust-postgres/rust-postgres#c6e435e03d936b5dcf551fc61e40f10b10fd1de2"
 dependencies = [
  "byteorder",
  "bytes",
