@@ -155,6 +155,7 @@ async fn submit(
         uid: user.uid,
         module_name,
         const_name,
+        is_module: meta.is_module(),
         imports,
         version: meta.version,
         hash: answer_hash,
@@ -440,12 +441,20 @@ async fn rejudge_submission(
         let imports = olean::parse_imports(meta)?;
         if !consts.contains(&submission.const_name) { do yeet; }
         let version = meta.version;
-        (olean, version, imports)
+        let is_module = meta.is_module();
+        (olean, version, is_module, imports)
     };
-    let Some((olean, version, imports)) = w else {
+    let Some((olean, version, is_module, imports)) = w else {
         let stmt = conn.prepare_static(SQL_REJUDGE_FAIL.into()).await?;
         let n = conn.execute(&stmt, &[&"Rejudge fail.", &submission_id.cast_signed()]).await?;
-        return if n == 1 { JkmxJsonResponse::Response(StatusCode::OK, BYTES_EMPTY) } else { private::err() };
+        if n != 1 { return private::err(); }
+        if is_ac {
+            let stmt_reduce_ac = conn.prepare_static(SQL_REDUCE_AC.into()).await?;
+            conn.execute(&stmt_reduce_ac, &[&submission.pid]).await?;
+            let stmt_user_ac = conn.prepare_static(SQL_USER_AC.into()).await?;
+            conn.execute(&stmt_user_ac, &[&&*submission.submitter]).await?;
+        }
+        return JkmxJsonResponse::Response(StatusCode::OK, BYTES_EMPTY);
     };
 
     let mut sha256 = Sha256::new();
@@ -457,6 +466,7 @@ async fn rejudge_submission(
         uid: submission.submitter,
         module_name: submission.module_name,
         const_name: submission.const_name,
+        is_module,
         imports,
         version,
         hash: answer_hash,

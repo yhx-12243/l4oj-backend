@@ -8,10 +8,11 @@ use std::sync::OnceLock;
 use compact_str::CompactString;
 use hashbrown::HashMap;
 
-const DATA: [(&[u8], &[u8; 40]); 3] = [
+const DATA: [(&[u8], &[u8; 40]); 4] = [
     (b".26.0", b"d8204c9fd894f91bbb2cdfec5912ec8196fd8562"),
     (b".27.0-rc1", b"2fcce7258eeb6e324366bc25f9058293b04b7547"),
     (b".27.0", b"db93fe1608548721853390a10cd40580fe7d22ae"),
+    (b".28.0-rc1", b"3b0f2862196c6a8af9eb0025ee650252694013dd"),
 ];
 
 const STD: [&str; 17] = [
@@ -86,6 +87,13 @@ pub struct OleanMeta<'a> {
     pub version: &'static str,
     base: usize,
     sections: &'a [usize; 7],
+}
+
+impl OleanMeta<'_> {
+    #[inline(always)]
+    pub fn is_module(&self) -> bool {
+        self.sections[6] != 0
+    }
 }
 
 #[cfg(test)]

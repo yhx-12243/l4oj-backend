@@ -53,6 +53,9 @@ fn check_prefix(prefix: &[u8]) -> bool {
 }
 
 fn check_suffix(suffix: &str) -> bool {
+    if let Some(a) = suffix.strip_suffix(".ir") {
+        return a.split('/').all(is_lean_id)
+    }
     let b = if let Some(a) = suffix.strip_suffix(".server") { a }
     else if let Some(a) = suffix.strip_suffix(".private") { a }
     else { suffix };

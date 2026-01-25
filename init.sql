@@ -674,7 +674,7 @@ ALTER TABLE ONLY lean4oj.problem_tags
 --
 
 ALTER TABLE ONLY lean4oj.problems
-    ADD CONSTRAINT problems_owner_fkey FOREIGN KEY (owner) REFERENCES lean4oj.users(uid);
+    ADD CONSTRAINT problems_owner_fkey FOREIGN KEY (owner) REFERENCES lean4oj.users(uid) MATCH FULL;
 
 
 --

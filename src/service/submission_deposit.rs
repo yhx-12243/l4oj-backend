@@ -50,6 +50,7 @@ pub struct Task {
     pub uid: CompactString,
     pub module_name: CompactString,
     pub const_name: CompactString,
+    pub is_module: bool,
     pub imports: Vec<CompactString>,
     pub version: &'static str,
     pub hash: [u8; 32],
@@ -137,13 +138,40 @@ fn deposit_main_lean(
     fs::write(format!("{sroot}/main.lean"), content)
 }
 
+fn deposit_module_inner(
+    src: &str,
+    sroot: &str,
+) -> io::Result<()> {
+    let content = fs::read(src)?;
+
+    let mut sha256 = Sha256::new();
+    sha256.update(&content);
+    let hash = sha256.finish();
+
+    let dest = cache_path(&hash);
+
+    match fs::hard_link(&*src, &*dest) {
+        Ok(()) => (),
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => (),
+        Err(e) if e.kind() == io::ErrorKind::CrossesDevices => { fs::copy(&*src, &*dest)?; }
+        Err(e) => return Err(e),
+    }
+
+    let f0 = unsafe { src.get_unchecked(const { env!("OLEAN_ROOT").len() + 5 }..) };
+    let f1 = "../".repeat(f0.bytes().filter(|&b| b == b'/').count() + 4) + unsafe { dest.get_unchecked(const { env!("OLEAN_ROOT").len() + 1 }..) };
+    let f2 = sroot.to_owned() + f0;
+
+    std::os::unix::fs::symlink(&*f1, &*f2)
+}
+
 fn deposit_one(
     uid: &str,
     module: &str,
     hash: &[u8; 32],
     sroot: &str,
+    is_module: bool,
 ) -> io::Result<()> {
-    let src = olean::𝑔𝑒𝑡_𝑜𝑙𝑒𝑎𝑛_𝑝𝑎𝑡ℎ(uid, module);
+    let mut src = olean::𝑔𝑒𝑡_𝑜𝑙𝑒𝑎𝑛_𝑝𝑎𝑡ℎ(uid, module);
     let dest = cache_path(hash);
 
     match fs::hard_link(&*src, &*dest) {
@@ -159,13 +187,28 @@ fn deposit_one(
     let pos = unsafe { f2.rfind('/').unwrap_unchecked() };
     fs::create_dir_all(unsafe { f2.get_unchecked(..pos) })?;
 
-    std::os::unix::fs::symlink(&*f1, &*f2)
+    std::os::unix::fs::symlink(&*f1, &*f2)?;
+
+    if is_module {
+        let l = src.len();
+        src.push_str(".private");
+        deposit_module_inner(&src, sroot)?;
+
+        unsafe { src.as_mut_vec().set_len(l); }
+        src.push_str(".server");
+        deposit_module_inner(&src, sroot)?;
+
+        unsafe { src.as_mut_vec().set_len(l - 5); }
+        src.push_str("ir");
+        deposit_module_inner(&src, sroot)?;
+    }
+    Ok(())
 }
 
 fn deposit_inner(task: Task, checker: String) -> io::Result<(SubmissionStatus, SubmissionMessageAction)> {
     let sroot = submission_path(task.sid)?;
 
-    deposit_one(&task.uid, &task.module_name, &task.hash, &sroot)?;
+    deposit_one(&task.uid, &task.module_name, &task.hash, &sroot, task.is_module)?;
 
     let mut queue = VecDeque::<CompactString>::from(task.imports);
     let mut visited = HashSet::<CompactString>::new();
@@ -193,7 +236,7 @@ fn deposit_inner(task: Task, checker: String) -> io::Result<(SubmissionStatus, S
         sha256.update(&olean);
         let hash = sha256.finish();
 
-        deposit_one(&task.uid, module, &hash, &sroot)?;
+        deposit_one(&task.uid, module, &hash, &sroot, meta.is_module())?;
 
         e.insert();
         imports.into_iter().filter(|import| !visited.contains(import)).collect_into(&mut queue);

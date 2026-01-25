@@ -96,7 +96,7 @@ impl const Default for Misc {
             discussion_reaction_emojis: &["👍", "👎", "😄", "😕", "❤", "🤔", "🤣", "🌿", "🍋", "🕊"],
             discussion_reaction_allow_custom_emojis: true,
             disabled_emoji_in_math: &["↔", "↪"],
-            lean_versions: &["4.26.0", "4.27.0-rc1", "4.27.0"],
+            lean_versions: &["4.26.0", "4.27.0-rc1", "4.27.0", "4.28.0-rc1"],
         }
     }
 }

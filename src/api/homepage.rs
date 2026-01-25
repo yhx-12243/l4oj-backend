@@ -55,6 +55,7 @@ impl const Default for Countdowns {
         Self {
             items: SliceMap::from_slice([
                 ("WC 2026", 1_770_336_000_000),
+                ("RMM 2026", 1_772_002_800_000),
                 ("China TST 2026-1", 1_772_841_600_000),
                 ("IMO 2026", 1_784_075_400_000),
                 ("IOI 2026", 1_786_215_600_000),
@@ -76,7 +77,7 @@ struct HomepageRequest {
     locale: Option<CompactString>,
 }
 
-const ANNOUNCEMENT_IDS: [u32; 5] = [1, 2, 3, 4, 12];
+const ANNOUNCEMENT_IDS: [u32; 6] = [1, 2, 3, 5, 4, 12];
 
 #[derive(Serialize)]
 struct Inner1 {

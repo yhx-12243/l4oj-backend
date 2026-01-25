@@ -26,8 +26,8 @@ pub const fn friend_links(locale: Option<&str>) -> [(&'static str, &'static str)
         (
             match locale {
                 Some("en_US") => "Lean Online Judge by Ansar",
-                Some("ja_JP") => "Ansar の Lean オンライン評価",
-                _ => "Ansar 的 Lean Online Judge",
+                Some("ja_JP") => "AnsarのLeanオンライン評価",
+                _ => "Ansar的Lean Online Judge",
             },
             "https://leanoj.org/",
         ),
