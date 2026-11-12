@@ -29,6 +29,15 @@ pub fn unescape_quoted(str: &str) -> Result<Cow<'_, str>, serde_json::Error> {
     }
 }
 
+#[inline(always)]
+pub const fn hex_digit(x: u8) -> Char {
+    match x {
+        0..10 => unsafe { Char::from_u8_unchecked(x + 48) },
+        10..16 => unsafe { Char::from_u8_unchecked(x + 87) },
+        _ => unsafe { core::hint::unreachable_unchecked() },
+    }
+}
+
 #[inline]
 #[allow(clippy::transmute_undefined_repr)]
 pub const fn get_millis(time: SystemTime) -> u128 {

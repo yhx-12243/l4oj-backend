@@ -1,3 +1,15 @@
+diff --git a/src/file/imp/unix.rs b/src/file/imp/unix.rs
+index 403250a..19f6171 100644
+--- a/src/file/imp/unix.rs
++++ b/src/file/imp/unix.rs
+@@ -52,6 +52,7 @@ pub fn create(dir: &Path) -> io::Result<File> {
+         .read(true)
+         .write(true)
+         .custom_flags(OFlags::TMPFILE.bits() as i32) // do not mix with `create_new(true)`
++        .mode(0o666)
+         .open(dir)
+         .or_else(|e| {
+             match Errno::from_io_error(&e) {
 diff --git a/src/file/mod.rs b/src/file/mod.rs
 index b3d51c3..4a8fb3b 100644
 --- a/src/file/mod.rs

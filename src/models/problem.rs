@@ -1,7 +1,6 @@
 use core::{
     fmt::{self, Write},
     future::ready,
-    mem,
 };
 use std::{
     collections::btree_map::{BTreeMap, Keys},
@@ -114,7 +113,7 @@ impl TryFrom<Row> for Problem {
         let owner = row.try_get::<_, &str>("owner")?.into();
         let Json(content) = row.try_get("pcontent")?;
         let sub = row.try_get::<_, i32>("sub")?.cast_unsigned();
-        let ac = row.try_get::<_, i32>("ac")?.cast_unsigned();
+        let ac = row.try_get::<_, i32>("pac")?.cast_unsigned();
         let submittable = row.try_get("submittable")?;
         let jb = row.try_get::<_, JsonChecked>("jb")?;
         let jb = row.buffer_bytes().slice_ref(jb.0);
@@ -127,14 +126,13 @@ impl TryFrom<Row> for Problem {
 #[inline]
 fn 𝒯(row: Row) -> DBResult<(Problem, Vec<u32>)> {
     let problem = row.clone().try_into()?;
-    let tag_ids = row.try_get::<_, Vec<i32>>("tags")?;
-    #[allow(clippy::transmute_undefined_repr)]
-    Ok((problem, unsafe { mem::transmute::<Vec<i32>, Vec<u32>>(tag_ids) }))
+    let tag_ids = row.try_get::<_, Vec<Option<i32>>>("tags")?;
+    Ok((problem, tag_ids.into_iter().filter_map(|x| x.map(i32::cast_unsigned)).collect()))
 }
 
 impl Problem {
     pub async fn by_pid(pid: i32, db: &mut Client) -> DBResult<Option<Self>> {
-        const SQL: &str = "select pid, is_public, public_at, owner, pcontent, sub, ac, submittable, jb from lean4oj.problems where pid = $1";
+        const SQL: &str = "select pid, is_public, public_at, owner, pcontent, sub, pac, submittable, jb from lean4oj.problems where pid = $1";
 
         let stmt = db.prepare_static(SQL.into()).await?;
         let result = match db.query_opt(&stmt, &[&pid]).await? {
@@ -145,7 +143,7 @@ impl Problem {
     }
 
     pub async fn by_pid_uid(pid: i32, uid: &str, db: &mut Client) -> DBResult<Option<Self>> {
-        const SQL: &str = "select pid, is_public, public_at, owner, pcontent, sub, ac, submittable, jb from lean4oj.problems where pid = $1 and (owner = $2 or is_public)";
+        const SQL: &str = "select pid, is_public, public_at, owner, pcontent, sub, pac, submittable, jb from lean4oj.problems where pid = $1 and (owner = $2 or is_public)";
 
         let stmt = db.prepare_static(SQL.into()).await?;
         let result = match db.query_opt(&stmt, &[&pid, &uid]).await? {
@@ -156,7 +154,7 @@ impl Problem {
     }
 
     pub async fn create(owner: &str, content: &LocaleDict<ProblemInner>, db: &mut Client) -> DBResult<i32> {
-        const SQL: &str = "insert into lean4oj.problems (owner, pcontent, jb) values ($1, $2, '{}') returning pid";
+        const SQL: &str = "insert into lean4oj.problems (owner, pcontent) values ($1, $2) returning pid";
 
         let stmt = db.prepare_static(SQL.into()).await?;
         let content: *const Json<BTreeMap<CompactString, ProblemInner>> = (&raw const content.0).cast();
@@ -183,7 +181,7 @@ impl Problem {
     where
         F: FnOnce(String, SmallVec<[&'a (dyn ToSql + Sync); 8]>) -> (String, SmallVec<[&'a (dyn ToSql + Sync); 8]>),
     {
-        let mut sql = "(select pid, is_public, public_at, owner, pcontent, sub, ac, submittable, jb, array_agg(tid) as tags from lean4oj.problems natural join lean4oj.problem_tags where pid >= 0".to_owned();
+        let mut sql = "(select pid, is_public, public_at, owner, pcontent, sub, pac, submittable, jb, array_agg(tid) as tags from lean4oj.problems natural left join lean4oj.problem_tags where pid >= 0".to_owned();
         let pos1 = sql.len();
         let mut args: SmallVec<[&(dyn ToSql + Sync); 8]> = smallvec![
             unsafe { core::mem::transmute::<&i64, &'a i64>(&skip) } as _,
@@ -196,7 +194,7 @@ impl Problem {
             let _ = write!(&mut sql, " having ${} <@ array_agg(tid)", args.len() + 1);
             args.push(unsafe { core::mem::transmute::<&&'a [i32], &'a &'a [i32]>(tag_ids) });
         }
-        sql.push_str(" order by pid) union all (select pid, is_public, public_at, owner, pcontent, sub, ac, submittable, jb, array_agg(tid) as tags from lean4oj.problems natural join lean4oj.problem_tags where pid < 0");
+        sql.push_str(" order by pid) union all (select pid, is_public, public_at, owner, pcontent, sub, pac, submittable, jb, array_agg(tid) as tags from lean4oj.problems natural left join lean4oj.problem_tags where pid < 0");
         sql.extend_from_within(pos1..pos2);
         sql.push_str(" group by pid");
         if tag_ids.is_some() {
@@ -213,7 +211,7 @@ impl Problem {
     where
         F: FnOnce(String, SmallVec<[&'a (dyn ToSql + Sync); 8]>) -> (String, SmallVec<[&'a (dyn ToSql + Sync); 8]>),
     {
-        let mut sql = "select count(*) from (select from lean4oj.problems natural join lean4oj.problem_tags where true".to_owned();
+        let mut sql = "select count(*) from (select from lean4oj.problems natural left join lean4oj.problem_tags where true".to_owned();
         let mut args: SmallVec<[&(dyn ToSql + Sync); 8]> = smallvec![];
         (sql, args) = extend(sql, args);
         sql.push_str(" group by pid");

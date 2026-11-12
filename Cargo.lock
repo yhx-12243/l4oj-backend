@@ -67,7 +67,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 [[package]]
 name = "axum"
 version = "0.8.8"
-source = "git+https://github.com/tokio-rs/axum#a34d06b3e9f47577ece6a1b5f522f3c11e5a9fe6"
+source = "git+https://github.com/tokio-rs/axum#81e727faf6c2510290b98e29f4b06fec5c96cfdd"
 dependencies = [
  "axum-core",
  "base64",
@@ -103,7 +103,7 @@ dependencies = [
 [[package]]
 name = "axum-core"
 version = "0.5.6"
-source = "git+https://github.com/tokio-rs/axum#a34d06b3e9f47577ece6a1b5f522f3c11e5a9fe6"
+source = "git+https://github.com/tokio-rs/axum#81e727faf6c2510290b98e29f4b06fec5c96cfdd"
 dependencies = [
  "bytes",
  "futures-core",
@@ -979,9 +979,9 @@ dependencies = [
 
 [[package]]
 name = "rand_core"
-version = "0.9.4"
+version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f1b3bc831f92381018fd9c6350b917c7b21f1eed35a65a51900e0e55a3d7afa"
+checksum = "76afc826de14238e6e8c374ddcc1fa19e374fd8dd986b0d2af0d02377261d83c"
 dependencies = [
  "getrandom 0.3.4",
 ]
@@ -1673,6 +1673,6 @@ dependencies = [
 
 [[package]]
 name = "zmij"
-version = "1.0.13"
+version = "1.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac93432f5b761b22864c774aac244fa5c0fd877678a4c37ebf6cf42208f9c9ec"
+checksum = "bd8f3f50b848df28f887acb68e41201b5aea6bc8a8dacc00fb40635ff9a72fea"

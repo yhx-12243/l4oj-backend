@@ -24,6 +24,16 @@ pub async fn check(uid: &str, privi: &str, db: &mut Client) -> DBResult<bool> {
     db.query_opt(&stmt, &[&uid, &privi]).await.map(|x| x.is_some())
 }
 
+pub async fn check_any<'a, I>(uid: &str, privi: I, db: &mut Client) -> DBResult<bool>
+where
+    I: ExactSizeIterator<Item = &'a str> + Clone + fmt::Debug + Sync,
+{
+    const SQL: &str = "select from lean4oj.user_groups where uid = $1 and (gid = any ($2)) limit 1";
+
+    let stmt = db.prepare_static(SQL.into()).await?;
+    db.query_opt(&stmt, &[&uid, &ToSqlIter(privi)]).await.map(|x| x.is_some())
+}
+
 fn 𝒻(row: Row) -> DBResult<CompactString> {
     let group = row.try_get::<_, &str>(0)?;
     if let Some(perm) = group.strip_prefix("Lean4OJ.") {

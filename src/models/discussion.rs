@@ -81,11 +81,6 @@ impl TryFrom<Row> for Discussion {
 }
 
 #[inline]
-fn ℊ(row: Row) -> DBResult<(Discussion, User)> {
-    Ok((row.clone().try_into()?, row.try_into()?))
-}
-
-#[inline]
 fn 𝒢(row: Row) -> DBResult<(Discussion, Option<Problem>, User)> {
     Ok((row.clone().try_into()?, row.clone().try_into().ok(), row.try_into()?))
 }
@@ -107,7 +102,7 @@ impl Discussion {
 
         let stmt = db.prepare_static(SQL.into()).await?;
         let result = match db.query_opt(&stmt, &[&id.cast_signed()]).await? {
-            Some(row) => Some(ℊ(row)?),
+            Some(row) => Some((row.clone().try_into()?, row.try_into()?)),
             None => None,
         };
         Ok(result)
@@ -117,7 +112,7 @@ impl Discussion {
     where
         I: ExactSizeIterator<Item = u32> + Clone + fmt::Debug + Sync,
     {
-        const SQL: &str = "select ids.id, title, content, publish, edit, update, reply_count, publisher, pid from unnest($1::integer[]) with ordinality as ids(id, o) inner join lean4oj.discussions on ids.id = discussions.id order by o";
+        const SQL: &str = "select id, title, content, publish, edit, update, reply_count, publisher, pid from unnest($1::integer[]) with ordinality as ids(id, o) natural join lean4oj.discussions order by o";
 
         let stmt = db.prepare_static(SQL.into()).await?;
         let stream = db.query_raw(&stmt, [ToSqlIter(ids.map(u32::cast_signed))]).await?;
@@ -155,7 +150,7 @@ impl Discussion {
     where
         F: FnOnce(String, SmallVec<[&'a (dyn ToSql + Sync); 8]>) -> (String, SmallVec<[&'a (dyn ToSql + Sync); 8]>),
     {
-        let mut sql = "select id, title, content, publish, edit, update, reply_count, publisher, pid, uid, username, email, password, register_time, ac, nickname, bio, avatar_info, is_public, public_at, owner, pcontent, sub, ac, submittable, jb from lean4oj.discussions inner join lean4oj.users on publisher = uid natural left join lean4oj.problems".to_owned();
+        let mut sql = "select id, title, content, publish, edit, update, reply_count, publisher, pid, uid, username, email, password, register_time, ac, nickname, bio, avatar_info, is_public, public_at, owner, pcontent, sub, pac, submittable, jb from lean4oj.discussions inner join lean4oj.users on publisher = uid natural left join lean4oj.problems".to_owned();
         let mut args: SmallVec<[&(dyn ToSql + Sync); 8]> = smallvec![
             unsafe { core::mem::transmute::<&i64, &'a i64>(&skip) } as _,
             unsafe { core::mem::transmute::<&i64, &'a i64>(&take) } as _,

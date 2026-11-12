@@ -34,6 +34,9 @@ ALTER TABLE ONLY lean4oj.discussion_replies DROP CONSTRAINT discussion_replies_d
 ALTER TABLE ONLY lean4oj.discussion_reactions DROP CONSTRAINT discussion_reactions_uid_fkey;
 DROP INDEX lean4oj.users_ac_idx;
 DROP INDEX lean4oj.user_groups_gid_uid_idx;
+DROP INDEX lean4oj.submissions_submitter_sid_idx;
+DROP INDEX lean4oj.submissions_status_sid_idx;
+DROP INDEX lean4oj.submissions_pid_sid_idx;
 DROP INDEX lean4oj.discussion_replies_did_id_idx;
 DROP INDEX lean4oj.discussion_reactions_eid_emoji_idx;
 ALTER TABLE ONLY lean4oj.users DROP CONSTRAINT users_pkey;
@@ -196,9 +199,9 @@ CREATE TABLE lean4oj.problems (
     owner character varying(24) NOT NULL COLLATE public.case_insensitive,
     pcontent jsonb NOT NULL,
     sub integer DEFAULT 0 NOT NULL,
-    ac integer DEFAULT 0 NOT NULL,
+    pac integer DEFAULT 0 NOT NULL,
     submittable boolean DEFAULT true NOT NULL,
-    jb jsonb NOT NULL
+    jb jsonb DEFAULT '{"axioms": [{"url": "https://leanprover-community.github.io/mathlib4_docs/Init/Core.html#propext", "name": "propext"}, {"url": "https://leanprover-community.github.io/mathlib4_docs/Init/Core.html#Quot.sound", "name": "Quot.sound"}, {"url": "https://leanprover-community.github.io/mathlib4_docs/Init/Prelude.html#Classical.choice", "name": "Classical.choice"}], "checker": "import Lean4OJ.Checker\nimport Lean4OJ.String\n\ndef Lean4OJ.prop (_answer : Unit) : Prop := ∀ a b : Nat, a + b = b + a\ndef Lean4OJ.answer : Unit := Lean4OJ.extractAnswer (answer := ()) Lean4OJ.prop ⍼\n\n#eval Lean4OJ.defString `Lean4OJ.answer_str (toString Lean4OJ.answer)\ntheorem Lean4OJ.answer_sound : Lean4OJ.ToString.toString Lean4OJ.answer = Lean4OJ.answer_str := rfl\n"}'::jsonb NOT NULL
 );
 
 
@@ -230,14 +233,15 @@ CREATE TABLE lean4oj.submissions (
     sid integer NOT NULL,
     pid integer NOT NULL,
     submitter character varying(24) NOT NULL COLLATE public.case_insensitive,
-    "time" timestamp without time zone NOT NULL,
+    submit_time timestamp without time zone NOT NULL,
     module_name text NOT NULL,
     const_name text NOT NULL,
     lean_toolchain character varying(24) NOT NULL,
     status "char" DEFAULT (0)::"char" NOT NULL,
     message text DEFAULT ''::text NOT NULL,
     answer_size bigint NOT NULL,
-    answer_hash bytea NOT NULL
+    answer_hash bytea NOT NULL,
+    answer_obj text DEFAULT ''::text NOT NULL
 );
 
 
@@ -421,7 +425,7 @@ docs		docs		1970-01-01 00:00:00	0
 references		references		1970-01-01 00:00:00	0			
 Lean4OJ		Lean4OJ		1970-01-01 00:00:00	0			
 build		build		1970-01-01 00:00:00	0			
-submissions		submissions		1970-01-01 00:00:00	0			
+submission		submission		1970-01-01 00:00:00	0			
 \.
 
 --
@@ -540,6 +544,27 @@ CREATE INDEX discussion_reactions_eid_emoji_idx ON lean4oj.discussion_reactions 
 --
 
 CREATE INDEX discussion_replies_did_id_idx ON lean4oj.discussion_replies USING btree (did, id);
+
+
+--
+-- Name: submissions_pid_sid_idx; Type: INDEX; Schema: lean4oj; Owner: -
+--
+
+CREATE INDEX submissions_pid_sid_idx ON lean4oj.submissions USING btree (pid, sid);
+
+
+--
+-- Name: submissions_status_sid_idx; Type: INDEX; Schema: lean4oj; Owner: -
+--
+
+CREATE INDEX submissions_status_sid_idx ON lean4oj.submissions USING btree (status, sid);
+
+
+--
+-- Name: submissions_submitter_sid_idx; Type: INDEX; Schema: lean4oj; Owner: -
+--
+
+CREATE INDEX submissions_submitter_sid_idx ON lean4oj.submissions USING btree (submitter, sid);
 
 
 --

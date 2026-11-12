@@ -119,3 +119,7 @@ wildcard_enum_match_arm = { level = "allow", priority = 1 }
 [[bin]]
 name = "backend"
 path = "src/main.rs"
+
+[[bin]]
+name = "judger"
+path = "src/judger.rs"

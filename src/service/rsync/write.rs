@@ -7,11 +7,11 @@ use core::{
 };
 use std::{
     ffi::OsStr,
-    fs::ReadDir,
+    fs::{Permissions, ReadDir},
     io,
     os::{
         fd::{AsRawFd, RawFd},
-        unix::fs::DirEntryExt2,
+        unix::fs::{DirEntryExt2, PermissionsExt},
     },
     path::PathBuf,
     str::pattern::Searcher,
@@ -231,7 +231,8 @@ where
     let mut buf = [MaybeUninit::<u8>::uninit(); 24];
     let buf18 = unsafe { slice::from_raw_parts_mut(buf.as_mut_ptr().cast(), 18) };
     let buf20 = unsafe { slice::from_raw_parts_mut(buf.as_mut_ptr().cast(), 20) };
-    let tb = Builder::new();
+    let mut tb = Builder::new();
+    tb.permissions(Permissions::from_mode(0o666));
     loop {
         let idx = match state.recv(&mut rx).await {
             Ok(i) => i,
@@ -341,7 +342,11 @@ pub async fn main(
             TOTAL_FILE_LIMIT
         }
     };
-    let mut buf = format!("{}/lean/{}/", env!("OLEAN_ROOT"), user.uid);
+    let mut buf = String::with_capacity(env!("OLEAN_ROOT").len() + user.uid.len() + 7);
+    buf.push_str(env!("OLEAN_ROOT"));
+    buf.push_str("/lean/");
+    buf.push_str(&user.uid);
+    buf.push('/');
     let (mut fl, acc) = generate_file_list(
         &mut rx,
         unsafe { buf.get_unchecked(const { env!("OLEAN_ROOT").len() + 5 }..) },
@@ -349,9 +354,7 @@ pub async fn main(
     ).await?;
     fl.sort();
     unsafe { *buf.as_mut_vec().get_unchecked_mut(Last) = 0; }
-    if unsafe { libc::mkdir(buf.as_ptr().cast(),
-        cfg_select!(target_os = "linux" => { 0o770 } _ => { 0o777 })
-    ) } != 0 {
+    if unsafe { libc::mkdir(buf.as_ptr().cast(), 0o770) } != 0 {
         let err = io::Error::last_os_error();
         if err.raw_os_error() != Some(libc::EEXIST) { return Err(err.into()); }
     }

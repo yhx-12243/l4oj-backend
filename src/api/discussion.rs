@@ -29,7 +29,6 @@ use crate::{
         response::JkmxJsonResponse,
         serde::WithJson,
         util::get_millis,
-        validate::is_lean_id,
     },
     models::{
         discussion::{
@@ -256,12 +255,14 @@ async fn query_discussions(
         take_count,
     }) = req?;
 
-    let kw = keyword.as_deref().unwrap_or_default();
-    let uid = publisher_id.as_deref().unwrap_or_default();
-    let has_kw = !kw.is_empty();
-    let has_uid = is_lean_id(uid);
+    let publisher__inner___ = publisher_id.as_deref();
     let buf;
-    let ekw = if has_kw { buf = 𝑒𝑠𝑐𝑎𝑝𝑒(kw); &*buf } else { kw };
+    let mut magic = false;
+    let keyword__inner___ = if let Some(ref kw) = keyword {
+        magic = kw.contains(Discussion::MAGIC_PREFIX);
+        buf = 𝑒𝑠𝑐𝑎𝑝𝑒(kw);
+        Some(&*buf)
+    } else { None };
 
     let mut conn = get_connection().await?;
     let maybe_user = User::from_maybe_session(&session, &mut conn).await?;
@@ -283,16 +284,16 @@ async fn query_discussions(
                 );
             }
         }
-        if has_kw {
+        if let Some(ref kw) = keyword__inner___ {
             let _ = write!(&mut sql, " and title ilike ${}", args.len() + 1);
             args.push(
-                unsafe { core::mem::transmute::<&&str, &'static &str>(&ekw) } as _
+                unsafe { core::mem::transmute::<&&str, &'static &str>(kw) } as _
             );
         }
-        if has_uid {
+        if let Some(ref publisher) = publisher__inner___ {
             let _ = write!(&mut sql, " and publisher = ${}", args.len() + 1);
             args.push(
-                unsafe { core::mem::transmute::<&&str, &'static &str>(&uid) } as _
+                unsafe { core::mem::transmute::<&&str, &'static &str>(publisher) } as _
             );
         }
         if problem_id.is_some() && !privi {
@@ -313,7 +314,7 @@ async fn query_discussions(
 
     let mut res = r#"{"discussions":"#.to_owned();
     if title_only == Some(true) {
-        let discussions = if kw.contains(Discussion::MAGIC_PREFIX) {
+        let discussions = if magic {
             Vec::new()
         } else {
             let mut discussions = Discussion::search(skip, take, extend, &mut conn).await?;
@@ -324,7 +325,7 @@ async fn query_discussions(
         serde_json::to_writer(unsafe { res.as_mut_vec() }, &discussions)?;
     } else {
         let mut discussions = Vec::new();
-        if !kw.contains(Discussion::MAGIC_PREFIX) {
+        if !magic {
             discussions = Discussion::search_aoe(skip, take, extend, &mut conn)
                 .await?
                 .into_iter()
@@ -342,14 +343,14 @@ async fn query_discussions(
         serde_json::to_writer(unsafe { res.as_mut_vec() }, &discussions)?;
         let count = Discussion::count_aoe(extend, &mut conn).await?;
         write!(&mut res, r#","permissions":{{"createDiscussion":true,"filterNonpublic":true}},"count":{count}"#)?;
-        if has_uid {
+        if let Some(publisher) = publisher__inner___ {
             res.push_str(r#","filterPublisher":"#);
             let user_slot: Option<User>;
             let user_ref: &User =
                 if let Some(Inner3 { publisher, .. }) = discussions.first() {
                     publisher
                 } else {
-                    user_slot = User::by_uid(uid, &mut conn).await?;
+                    user_slot = User::by_uid(publisher, &mut conn).await?;
                     if let Some(u) = user_slot.as_ref() { u } else { return NO_SUCH_USER; }
                 };
             serde_json::to_writer(unsafe { res.as_mut_vec() }, user_ref)?;

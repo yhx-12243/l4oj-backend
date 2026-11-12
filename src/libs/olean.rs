@@ -12,10 +12,34 @@ const DATA: [(&[u8], &[u8; 40]); 1] = [
     (b".26.0", b"d8204c9fd894f91bbb2cdfec5912ec8196fd8562"),
 ];
 
+const STD: [&str; 16] = [
+    "Aesop",
+    "Archive",
+    "Batteries",
+    "Counterexamples",
+    "ImportGraph",
+    "Init",
+    "Lake",
+    "Lean",
+    "LeanSearchClient",
+    "Mathlib",
+    "Plausible",
+    "ProofWidgets",
+    "Qq",
+    "Std",
+    "docs",
+    "references",
+];
+
 static ACCEPTABLE_VERSIONS: OnceLock<HashMap<&[u8], &[u8; 40]>> = OnceLock::new();
 
 pub fn init() {
     ACCEPTABLE_VERSIONS.get_or_init(|| HashMap::from(DATA));
+}
+
+#[inline]
+pub fn is_std(module: &str) -> bool {
+    STD.into_iter().any(|s| *module == *s || module.strip_prefix(s).is_some_and(|t| t.starts_with('.')))
 }
 
 pub fn lean_version_80(header: &[u8; 80]) -> Option<&'static str> {
@@ -93,15 +117,6 @@ mod detail {
 
     use super::super::validate::is_lean_id;
 
-    pub(super) fn array(payload: &[u8], offset: usize) -> Option<&[usize]> {
-        let header = unsafe { &*payload.get(offset..offset + 24)?.as_ptr().cast::<[usize; 3]>() };
-        if header[0] != 0xf600_0001_0000_0000 || header[1] != header[2] { return None; }
-        let n = header[1];
-        let start = offset + 24;
-        if start.checked_add(n.checked_mul(8)?)? > payload.len() { return None; }
-        Some(unsafe { slice::from_raw_parts(payload.as_ptr().add(start).cast::<usize>(), n) })
-    }
-
     #[inline]
     fn is_hcongr_reserved_name_suffix(s: &str) -> bool {
         if let Some(suffix) = s.strip_prefix("hcongr_") {
@@ -122,12 +137,22 @@ mod detail {
         is_hcongr_reserved_name_suffix(s)
     }
 
+    pub(super) fn array(payload: &[u8], offset: usize) -> Option<&[usize]> {
+        let header = unsafe { &*payload.get(offset..offset + 24)?.as_ptr().cast::<[usize; 3]>() };
+        if header[0] != 0xf600_0001_0000_0000 || header[1] != header[2] { return None; }
+        let n = header[1];
+        let start = offset + 24;
+        if start.checked_add(n.checked_mul(8)?)? > payload.len() { return None; }
+        Some(unsafe { slice::from_raw_parts(payload.as_ptr().add(start).cast::<usize>(), n) })
+    }
+
     pub(super) fn str(payload: &[u8], base: usize, addr: usize) -> Option<&str> {
         let p = addr - base;
-        let header = unsafe { &*payload.get(p..p + 32)?.as_ptr().cast::<[usize; 4]>() };
-        if header[0] != 0xf900_0001_0000_0000 { return None; }
-        let len = header[3];
-        str::from_utf8(payload.get(p + 32..(p + 32).checked_add(len)?)?).ok()
+        let header = unsafe { &*payload.get(p..p + 24)?.as_ptr().cast::<[usize; 3]>() };
+        if header[0] != 0xf900_0001_0000_0000 || header[1] != header[2] { return None; }
+        let n = header[1];
+        let raw = payload.get(p + 32..(p + 32).checked_add(n)?)?;
+        str::from_utf8(raw.strip_suffix(b"\0")?).ok()
     }
 
     pub(super) fn name(payload: &[u8], base: usize, addr: usize) -> Option<CompactString> {

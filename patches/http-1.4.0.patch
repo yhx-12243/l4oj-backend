@@ -188,3 +188,20 @@ index bc58ba4..926e749 100644
          )+
  
          }
+diff --git a/src/uri/path.rs b/src/uri/path.rs
+index 8f9356e..c88c43c 100644
+--- a/src/uri/path.rs
++++ b/src/uri/path.rs
+@@ -377,6 +377,12 @@ impl hash::Hash for PathAndQuery {
+     }
+ }
+ 
++impl From<PathAndQuery> for (Bytes, u16) {
++    fn from(path_and_query: PathAndQuery) -> Self {
++        (path_and_query.data.into(), path_and_query.query)
++    }
++}
++
+ // ===== PartialEq / PartialOrd =====
+ 
+ impl PartialEq for PathAndQuery {

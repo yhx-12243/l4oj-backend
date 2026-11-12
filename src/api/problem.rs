@@ -350,13 +350,11 @@ async fn get_problem(
         false
     };
 
-    let Some(problem) = (
-        if privi {
-            Problem::by_pid(id, &mut conn).await
-        } else {
-            Problem::by_pid_uid(id, uid.unwrap_or_default(), &mut conn).await
-        }
-    )? else { return NO_SUCH_PROBLEM };
+    let Some(problem) = if privi {
+        Problem::by_pid(id, &mut conn).await
+    } else {
+        Problem::by_pid_uid(id, uid.unwrap_or_default(), &mut conn).await
+    }? else { return NO_SUCH_PROBLEM };
 
     let mut res = format!(r#"{{"meta":{}"#, WithJson(&problem));
     if owner == Some(true) {

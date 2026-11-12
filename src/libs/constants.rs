@@ -10,6 +10,7 @@ pub const BYTES_EMPTY: Bytes = Bytes::from_static(b"{}");
 pub const FORWARDED_HOST: HeaderName = HeaderName::from_static("d579fff85ca2d5edeaa17f53ab008dc84eb292a5");
 pub const REMOTE_ADDR: HeaderName = HeaderName::from_static("009f34034b761c32384fde345378c488efc18c59");
 pub const X_ACCEL_REDIRECT: HeaderName = HeaderName::from_static("x-accel-redirect");
+pub const X_ACCEL_KITSUNE: HeaderName = HeaderName::from_static("x-accel-kitsune");
 pub const DUMMY_HOST: HeaderValue = HeaderValue::from_static("kitsune.kiriha");
 pub const APPLICATION_JAVASCRIPT_UTF_8: HeaderValue = HeaderValue::from_static("application/javascript; charset=utf-8");
 pub const APPLICATION_JSON_UTF_8: HeaderValue = HeaderValue::from_static("application/json; charset=utf-8");

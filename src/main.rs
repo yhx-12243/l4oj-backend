@@ -104,7 +104,7 @@
     unsafe_cell_access,
     // unsize,
     // unwrap_infallible,
-    // yeet_expr,
+    yeet_expr,
 )]
 #![allow(
     confusable_idents,
